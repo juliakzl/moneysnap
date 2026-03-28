@@ -1,0 +1,32 @@
+# Private keys — never commit these
+*.pem
+
+# Database with real financial data
+*.db
+*.sqlite
+*.sqlite3
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Environment variables
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# macOS
+.DS_Store
+
+# Logs
+logs/

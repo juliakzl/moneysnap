@@ -1,0 +1,12 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      - id: check-uuids
+        name: Check for UUIDs
+        entry: scripts/check_uuids.sh
+        language: script
+        types: [text]
