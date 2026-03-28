@@ -49,8 +49,8 @@ Before you start, you'll need:
 ### 1. Clone and install
 
 ```bash
-git clone <your-fork-url>
-cd finance-app
+git clone https://github.com/juliakzl/moneysnap.git
+cd moneysnap
 uv sync
 ```
 

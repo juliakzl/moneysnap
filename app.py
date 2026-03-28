@@ -546,7 +546,6 @@ with tab_setup:
 with tab_dashboard:
     if df.empty:
         st.info("No transactions yet. Click 'Sync transactions' above.")
-        st.stop()
 
     # --- Wealth Overview ---
     wo_col, filter_col = st.columns([6, 2])
@@ -1457,10 +1456,28 @@ with tab_banks:
         for _, conn_row in connections.iterrows():
             accs = bank_accs[bank_accs["session_id"] == conn_row["session_id"]]
             with st.container(border=True):
-                c1, c2 = st.columns([6, 1])
+                c1, c2, c3 = st.columns([6, 1, 1])
                 c1.markdown(f"**{conn_row['display_name']}** — {conn_row['bank_name']} ({conn_row['bank_country']})  \n"
                             f"`{len(accs)} account(s)` · connected {conn_row['created_at'][:10]}")
-                if c2.button("Delete", key=f"del_conn_{conn_row['id']}"):
+                if c2.button("Sync accounts", key=f"sync_accs_{conn_row['id']}"):
+                    try:
+                        from finapp.banking.fetcher import get_accounts_for_session
+                        _sid = conn_row["session_id"]
+                        _acc_ids = get_accounts_for_session(_sid)
+                        _existing_ids = set(accs["account_id"].tolist())
+                        _added = 0
+                        for _i, _acc_id in enumerate(_acc_ids):
+                            if _acc_id not in _existing_ids:
+                                upsert_bank_account(account_id=_acc_id, session_id=_sid,
+                                                    display_name=f"{conn_row['display_name']} {_i+1}",
+                                                    iban="", currency="")
+                                _added += 1
+                        st.cache_data.clear()
+                        st.success(f"Found {len(_acc_ids)} account(s) total, added {_added} new.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to sync accounts: {e}")
+                if c3.button("Delete", key=f"del_conn_{conn_row['id']}"):
                     delete_bank_connection(int(conn_row["id"]))
                     st.rerun()
 
