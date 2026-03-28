@@ -1,6 +1,14 @@
-import jwt, time, requests, json, sys
+import jwt, time, requests, json, sys, tomllib, pathlib
 
-APP_ID = "YOUR_ENABLE_BANKING_APP_ID"  # from https://enablebanking.com dashboard
+secrets_path = pathlib.Path(".streamlit/secrets.toml")
+if not secrets_path.exists():
+    print("Error: .streamlit/secrets.toml not found. Run from the project root.")
+    sys.exit(1)
+
+with open(secrets_path, "rb") as f:
+    secrets = tomllib.load(f)
+
+APP_ID = secrets["enable_banking"]["app_id"]
 BASE_URL = "https://api.enablebanking.com"
 REDIRECT_URL = "https://localhost:3000/callback"
 

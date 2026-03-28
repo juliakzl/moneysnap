@@ -72,6 +72,8 @@ Copy the example and fill in your values:
 
 ```bash
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+open .streamlit/secrets.toml   # macOS — opens in your default text editor
+# or: nano .streamlit/secrets.toml
 ```
 
 Edit `.streamlit/secrets.toml`:
@@ -140,7 +142,11 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 6. **Set a financial goal** — Dashboard → Goals → add a goal with a target amount
 7. **Configure categories** — Settings → Transaction Categories → add your categories; then edit `src/finapp/rules.py` to add keyword → category rules for automatic matching
 8. **Add Anthropic API key** — in `secrets.toml` under `[anthropic]` — enables AI chat and auto-categorization
-9. **Set up email summaries** (optional) — in `secrets.toml` under `[email]` with a Gmail App Password
+9. **Set up email summaries** (optional) — requires a Gmail App Password (not your regular login password):
+   1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
+   2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+   3. Create a new app password — name it anything (e.g. "Finance App")
+   4. Copy the generated 16-character password and paste it into `secrets.toml` under `[email] app_password`
 
 ---
 
