@@ -1460,6 +1460,7 @@ with tab_banks:
                 c1.markdown(f"**{conn_row['display_name']}** — {conn_row['bank_name']} ({conn_row['bank_country']})  \n"
                             f"`{len(accs)} account(s)` · connected {conn_row['created_at'][:10]}")
                 if c2.button("Sync accounts", key=f"sync_accs_{conn_row['id']}"):
+                    st.session_state["_debug_acc_data"] = []
                     try:
                         from finapp.banking.fetcher import get_accounts_for_session
                         import requests as _requests
@@ -1482,8 +1483,8 @@ with tab_banks:
                                 _currency = _acc_data.get("currency", "")
                                 _acc_name = _acc_data.get("name") or _acc_data.get("product") or ""
                                 st.session_state.setdefault("_debug_acc_data", []).append(_acc_data)
-                            except Exception:
-                                pass
+                            except Exception as _e:
+                                st.session_state.setdefault("_debug_acc_data", []).append({"error": str(_e)})
                             if _acc_name:
                                 _label = _acc_name
                             elif _iban:
