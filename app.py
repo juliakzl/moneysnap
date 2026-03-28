@@ -1481,8 +1481,7 @@ with tab_banks:
                                 _iban = _ident.get("identification", "")
                                 _currency = _acc_data.get("currency", "")
                                 _acc_name = _acc_data.get("name") or _acc_data.get("product") or ""
-                                with st.expander(f"Debug: raw API response for account {_i+1}"):
-                                    st.json(_acc_data)
+                                st.session_state.setdefault("_debug_acc_data", []).append(_acc_data)
                             except Exception:
                                 pass
                             if _acc_name:
@@ -1499,9 +1498,12 @@ with tab_banks:
                                                 display_name=_label, iban=_iban, currency=_currency)
                         st.cache_data.clear()
                         st.success(f"Found {len(_acc_ids)} account(s) total, added {_added} new.")
-                        st.rerun()
                     except Exception as e:
                         st.error(f"Failed to sync accounts: {e}")
+                if st.session_state.get("_debug_acc_data"):
+                    for _di, _dd in enumerate(st.session_state["_debug_acc_data"]):
+                        with st.expander(f"Debug: raw API response for account {_di+1}"):
+                            st.json(_dd)
                 if c3.button("Delete", key=f"del_conn_{conn_row['id']}"):
                     delete_bank_connection(int(conn_row["id"]))
                     st.rerun()
