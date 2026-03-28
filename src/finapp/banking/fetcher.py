@@ -72,8 +72,7 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
     session_data = resp.json()
     session_id = session_data["session_id"]
     raw_accounts = session_data.get("accounts", [])
-    # API may return plain ID strings or dicts with an "id" key
-    account_ids = [a["id"] if isinstance(a, dict) else a for a in raw_accounts]
+    raise ValueError(f"DEBUG session_data: {session_data}")
 
     add_bank_connection(
         session_id=session_id,
