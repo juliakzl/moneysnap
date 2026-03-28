@@ -1462,16 +1462,39 @@ with tab_banks:
                 if c2.button("Sync accounts", key=f"sync_accs_{conn_row['id']}"):
                     try:
                         from finapp.banking.fetcher import get_accounts_for_session
+                        import requests as _requests
+                        from finapp.banking.fetcher import _headers
+                        from finapp.config import BASE_URL
                         _sid = conn_row["session_id"]
                         _acc_ids = get_accounts_for_session(_sid)
                         _existing_ids = set(accs["account_id"].tolist())
                         _added = 0
                         for _i, _acc_id in enumerate(_acc_ids):
+                            _iban = ""
+                            _currency = ""
+                            _acc_name = ""
+                            try:
+                                _r = _requests.get(f"{BASE_URL}/accounts/{_acc_id}", headers=_headers())
+                                _r.raise_for_status()
+                                _acc_data = _r.json()
+                                _ident = (_acc_data.get("account_identifications") or [{}])[0]
+                                _iban = _ident.get("identification", "")
+                                _currency = _acc_data.get("currency", "")
+                                _acc_name = _acc_data.get("name") or _acc_data.get("product") or ""
+                            except Exception:
+                                pass
+                            if _acc_name:
+                                _label = _acc_name
+                            elif _iban:
+                                _label = f"{conn_row['display_name']} ({_iban[-4:]})"
+                            else:
+                                _label = f"{conn_row['display_name']} {_i + 1}"
+                            if _currency:
+                                _label += f" {_currency}"
                             if _acc_id not in _existing_ids:
-                                upsert_bank_account(account_id=_acc_id, session_id=_sid,
-                                                    display_name=f"{conn_row['display_name']} {_i+1}",
-                                                    iban="", currency="")
                                 _added += 1
+                            upsert_bank_account(account_id=_acc_id, session_id=_sid,
+                                                display_name=_label, iban=_iban, currency=_currency)
                         st.cache_data.clear()
                         st.success(f"Found {len(_acc_ids)} account(s) total, added {_added} new.")
                         st.rerun()
