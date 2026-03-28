@@ -159,7 +159,6 @@ def init_db():
             conn.execute("ALTER TABLE bank_accounts ADD COLUMN is_joint INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
-    _migrate_bank_connections()
 
 
 def get_state(key: str) -> str | None:
@@ -353,27 +352,6 @@ def upsert_budget(category: str, limit: float):
 
 
 # --- Bank connections ---
-
-def _migrate_bank_connections():
-    """One-time migration: seed bank_connections from old hardcoded config if table is empty.
-    Called at the end of init_db() so the tables exist before we query them."""
-    with get_conn() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM bank_connections").fetchone()[0]
-        if count > 0:
-            return
-    try:
-        from finapp.config import SESSION_ID, ACCOUNT_NAMES  # type: ignore
-        add_bank_connection(
-            session_id=SESSION_ID,
-            bank_name="Revolut",
-            bank_country="DE",
-            display_name="Revolut",
-        )
-        for acc_id, name in ACCOUNT_NAMES.items():
-            upsert_bank_account(account_id=acc_id, session_id=SESSION_ID,
-                                display_name=name, iban="", currency="")
-    except Exception:
-        pass
 
 
 def get_bank_connections() -> pd.DataFrame:
