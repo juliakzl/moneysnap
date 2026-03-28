@@ -392,6 +392,7 @@ def upsert_bank_account(account_id: str, session_id: str, display_name: str,
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(account_id) DO UPDATE SET
                    session_id   = excluded.session_id,
+                   display_name = excluded.display_name,
                    iban         = excluded.iban,
                    currency     = excluded.currency""",
             (account_id, session_id, display_name, iban, currency),
