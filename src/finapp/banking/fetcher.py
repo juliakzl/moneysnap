@@ -83,6 +83,7 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
     for i, account_id in enumerate(account_ids):
         iban = ""
         currency = ""
+        acc_name = ""
         try:
             r = requests.get(f"{BASE_URL}/accounts/{account_id}", headers=_headers())
             r.raise_for_status()
@@ -90,10 +91,16 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
             ident = (acc_data.get("account_identifications") or [{}])[0]
             iban = ident.get("identification", "")
             currency = acc_data.get("currency", "")
+            acc_name = acc_data.get("name") or acc_data.get("product") or ""
         except Exception:
             pass
 
-        acc_label = f"{display_name} {i + 1}" if not iban else f"{display_name} ({iban[-4:]})"
+        if acc_name:
+            acc_label = acc_name
+        elif iban:
+            acc_label = f"{display_name} ({iban[-4:]})"
+        else:
+            acc_label = f"{display_name} {i + 1}"
         if currency:
             acc_label += f" {currency}"
         upsert_bank_account(account_id=account_id, session_id=session_id,
