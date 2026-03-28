@@ -72,7 +72,6 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
     session_data = resp.json()
     session_id = session_data["session_id"]
     raw_accounts = session_data.get("accounts", [])
-    raise ValueError(f"DEBUG session_data: {session_data}")
 
     add_bank_connection(
         session_id=session_id,
@@ -81,33 +80,44 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
         display_name=display_name,
     )
 
-    for i, account_id in enumerate(account_ids):
-        iban = ""
-        currency = ""
-        acc_name = ""
-        try:
-            r = requests.get(f"{BASE_URL}/accounts/{account_id}", headers=_headers())
-            r.raise_for_status()
-            acc_data = r.json()
-            ident = (acc_data.get("account_identifications") or [{}])[0]
-            iban = ident.get("identification", "")
-            currency = acc_data.get("currency", "")
-            acc_name = acc_data.get("name") or acc_data.get("product") or ""
-        except Exception:
-            pass
+    for i, acc in enumerate(raw_accounts):
+        if isinstance(acc, dict):
+            account_id = acc.get("uid", "")
+            if not account_id:
+                raise ValueError(
+                    f"Account {i + 1} has no 'uid' field. "
+                    f"Available keys: {list(acc.keys())}. "
+                    "Please report this so support for this bank can be added."
+                )
+            currency = acc.get("currency", "")
+            acc_id_obj = acc.get("account_id", {}) or {}
+            iban = acc_id_obj.get("iban", "") or ""
+            if not iban:
+                for id_entry in acc.get("all_account_ids") or []:
+                    if id_entry.get("scheme_name") == "IBAN":
+                        iban = id_entry.get("identification", "")
+                        break
+            if not iban:
+                for id_entry in acc.get("all_account_ids") or []:
+                    if id_entry.get("scheme_name") == "BBAN":
+                        iban = id_entry.get("identification", "")
+                        break
+        else:
+            account_id = acc
+            currency = ""
+            iban = ""
 
-        if acc_name:
-            acc_label = acc_name
-        elif iban:
+        if iban:
             acc_label = f"{display_name} ({iban[-4:]})"
         else:
             acc_label = f"{display_name} {i + 1}"
         if currency:
             acc_label += f" {currency}"
+
         upsert_bank_account(account_id=account_id, session_id=session_id,
                             display_name=acc_label, iban=iban, currency=currency)
 
-    return session_id, len(account_ids)
+    return session_id, len(raw_accounts)
 
 
 # --- Account / balance helpers ---
@@ -116,7 +126,18 @@ def get_accounts_for_session(session_id: str) -> list[str]:
     resp = requests.get(f"{BASE_URL}/sessions/{session_id}", headers=_headers())
     resp.raise_for_status()
     raw = resp.json().get("accounts", [])
-    return [a["id"] if isinstance(a, dict) else a for a in raw]
+    result = []
+    for a in raw:
+        if isinstance(a, dict):
+            uid = a.get("uid", "")
+            if not uid:
+                raise ValueError(
+                    f"Account object has no 'uid' field. Available keys: {list(a.keys())}."
+                )
+            result.append(uid)
+        else:
+            result.append(a)
+    return result
 
 
 def get_account_balance(account_id: str) -> float | None:
