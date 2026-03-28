@@ -71,7 +71,9 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
     resp.raise_for_status()
     session_data = resp.json()
     session_id = session_data["session_id"]
-    account_ids = session_data.get("accounts", [])
+    raw_accounts = session_data.get("accounts", [])
+    # API may return plain ID strings or dicts with an "id" key
+    account_ids = [a["id"] if isinstance(a, dict) else a for a in raw_accounts]
 
     add_bank_connection(
         session_id=session_id,
@@ -114,7 +116,8 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
 def get_accounts_for_session(session_id: str) -> list[str]:
     resp = requests.get(f"{BASE_URL}/sessions/{session_id}", headers=_headers())
     resp.raise_for_status()
-    return resp.json().get("accounts", [])
+    raw = resp.json().get("accounts", [])
+    return [a["id"] if isinstance(a, dict) else a for a in raw]
 
 
 def get_account_balance(account_id: str) -> float | None:
