@@ -1481,6 +1481,8 @@ with tab_banks:
                                 _iban = _ident.get("identification", "")
                                 _currency = _acc_data.get("currency", "")
                                 _acc_name = _acc_data.get("name") or _acc_data.get("product") or ""
+                                with st.expander(f"Debug: raw API response for account {_i+1}"):
+                                    st.json(_acc_data)
                             except Exception:
                                 pass
                             if _acc_name:
