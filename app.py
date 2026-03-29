@@ -649,8 +649,8 @@ with tab_dashboard:
     st.session_state["current_liquid_savings"] = liquid_savings_total
     st.session_state["current_investments"]    = investments_total
 
-    # Save daily snapshot once all numbers are known
-    if _minutes_since("last_wealth_snapshot") > 60 * 23:
+    # Save daily snapshot once all numbers are known — skip if totals are zero (balances not yet loaded)
+    if _minutes_since("last_wealth_snapshot") > 60 * 23 and net_worth > 0:
         save_wealth_snapshot(liquid_total, investments_total, net_worth)
         _touch("last_wealth_snapshot")
 
