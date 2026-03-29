@@ -1,4 +1,4 @@
-# Finance App
+# Money Snap
 
 A personal finance dashboard that connects to your real bank accounts via Open Banking (PSD2), tracks spending and investments, and lets you chat with an AI agent about your finances. All data is stored locally — nothing leaves your machine except the API calls you explicitly trigger. Works best with Revolut & Trade Republic combination.
 

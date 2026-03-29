@@ -24,7 +24,7 @@ try:
 except ImportError:
     _CATEGORIZATION_RULES = []
 
-st.set_page_config(page_title="Finance App", page_icon="💰", layout="wide")
+st.set_page_config(page_title="FMoney Snap", page_icon="💰", layout="wide")
 
 def _chart_header(title: str, info: str, key: str):
     """Render a chart title with a native Streamlit ? tooltip."""
