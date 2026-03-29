@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta, datetime, timezone
-from finapp.db import (init_db, get_transactions, get_state, set_state, get_goals, upsert_goal,
+from finapp.db import (init_db, get_transactions, upsert_transactions, get_state, set_state, get_goals, upsert_goal,
                        delete_goal, get_summaries, get_savings_accounts, upsert_savings_account,
                        delete_savings_account, get_assets, upsert_asset, delete_asset,
                        save_wealth_snapshot, get_wealth_snapshots, get_account_display_names,
