@@ -6,8 +6,10 @@ A personal finance dashboard that connects to your real bank accounts via Open B
 
 - **Dashboard** — net worth, spending breakdown, savings rate, month-over-month wealth growth
 - **Income & Spending** — categorized transactions, budget tracking, top merchants, projected monthly spend
+- **Investments** - your investment portfolio (either live pulled from your Trade Republic account or through manual entry/tickers)
 - **Goals** — track progress toward financial targets (e.g. buy a flat, emergency fund)
 - **Chat** — ask questions like "what did I spend on dining last month?" powered by Claude
+- **Weekly and Monthly Summaries** - generate financial summaries on weekly and/or monhtly basis and send them to your email address
 - **Banks** — connect bank accounts via OAuth, sync Trade Republic portfolio
 - **Settings** — manage categories, rules, salary, budgets, email summaries
 
