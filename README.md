@@ -22,7 +22,10 @@ uv sync
 # 2. Copy the secrets template and fill in your values
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 
-# 3. Start the app
+# 3. Copy the categorization rules template
+cp src/finapp/rules.example.py src/finapp/rules.py
+
+# 4. Start the app
 uv run streamlit run app.py
 ```
 
