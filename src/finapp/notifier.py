@@ -7,8 +7,10 @@ from email.mime.multipart import MIMEMultipart
 import anthropic
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
-from finapp.db import get_transactions, get_budgets, get_state, set_state, get_goals, save_summary, get_savings_accounts, get_main_account, get_bank_accounts
+from finapp.db import (get_transactions, get_budgets, get_state, set_state, get_goals, save_summary,
+                       get_savings_accounts, get_main_account, get_bank_accounts, get_assets, get_tr_prices)
 from finapp.banking.fetcher import get_account_balance
 
 INVESTMENT_CATEGORIES = {"Investments", "Joint Account"}
@@ -163,12 +165,66 @@ def _collect_financial_context() -> dict:
         merged = budgets.merge(month_sp, on="category", how="left").fillna(0)
         budget_status = merged.to_dict(orient="records")
 
-    bal_personal  = get_account_balance(main_account_id) if main_account_id else 0
-    joint_ids     = accounts_df[accounts_df["is_joint"] == 1]["account_id"].tolist() if not accounts_df.empty and "is_joint" in accounts_df.columns else []
-    bal_joint     = sum(get_account_balance(aid) or 0 for aid in joint_ids)
-    savings_df    = get_savings_accounts()
-    savings_total = savings_df["balance"].sum() if not savings_df.empty else 0.0
-    total_wealth  = (bal_personal or 0) + bal_joint + savings_total
+    # --- Wealth calculation (mirrors app.py) ---
+    joint_ids = set(
+        accounts_df[accounts_df["is_joint"] == 1]["account_id"].tolist()
+    ) if not accounts_df.empty and "is_joint" in accounts_df.columns else set()
+
+    api_total = sum(
+        (get_account_balance(r["account_id"]) or 0)
+        for _, r in accounts_df.iterrows()
+    ) if not accounts_df.empty else 0.0
+
+    savings_df = get_savings_accounts()
+    liquid_savings_df     = savings_df[savings_df["type"] == "flexible"] if not savings_df.empty else savings_df
+    investment_savings_df = savings_df[savings_df["type"] != "flexible"] if not savings_df.empty else savings_df
+
+    def _effective_balance(acc) -> float:
+        from datetime import date as _date
+        balance = float(acc["balance"])
+        balance_date = acc.get("balance_date")
+        monthly_contribution = float(acc.get("monthly_contribution") or 0)
+        interest_rate = float(acc.get("interest_rate") or 0)
+        if not balance_date:
+            return balance
+        days = (_date.today() - _date.fromisoformat(balance_date)).days
+        if days <= 0:
+            return balance
+        months = days / 30.44
+        balance += monthly_contribution * months
+        if interest_rate > 0:
+            balance *= (1 + interest_rate / 100) ** (days / 365)
+        return balance
+
+    liquid_savings_total = sum(_effective_balance(acc) for _, acc in liquid_savings_df.iterrows()) if not liquid_savings_df.empty else 0.0
+    liquid_total         = api_total + liquid_savings_total
+
+    assets_df = get_assets()
+    if not assets_df.empty:
+        tickers = tuple(assets_df["ticker"].tolist())
+        prices = {}
+        for ticker in tickers:
+            candidates = [ticker] if "." in ticker else [ticker, ticker + ".DE"]
+            for candidate in candidates:
+                try:
+                    val = yf.Ticker(candidate).fast_info["last_price"]
+                    if val:
+                        prices[ticker] = val
+                        break
+                except Exception:
+                    continue
+        tr_prices = get_tr_prices()
+        if tr_prices:
+            prices.update(tr_prices)
+        assets_df["current_price"] = assets_df["ticker"].map(prices)
+        assets_df["current_value"] = assets_df["shares"] * assets_df["current_price"]
+        portfolio_value = assets_df["current_value"].sum()
+    else:
+        portfolio_value = 0.0
+
+    investment_savings_total = sum(_effective_balance(acc) for _, acc in investment_savings_df.iterrows()) if not investment_savings_df.empty else 0.0
+    investments_total        = portfolio_value + investment_savings_total
+    total_wealth             = liquid_total + investments_total
 
     prev_snapshot = json.loads(get_state("weekly_wealth_snapshot") or "null")
     wealth_change = round(total_wealth - prev_snapshot["total"], 2) if prev_snapshot else None
@@ -187,14 +243,14 @@ def _collect_financial_context() -> dict:
     goals_df = get_goals()
     goals = []
     for _, g in goals_df.iterrows():
-        remaining   = max(g["target_amount"] - savings_total, 0)
+        remaining   = max(g["target_amount"] - total_wealth, 0)
         months_away = round(remaining / invested_amount, 1) if invested_amount > 0 else None
         goals.append({
             "name":             g["name"],
             "target_eur":       g["target_amount"],
-            "saved_eur":        round(savings_total, 2),
+            "saved_eur":        round(total_wealth, 2),
             "remaining_eur":    round(remaining, 2),
-            "progress_pct":     round(savings_total / g["target_amount"] * 100, 1) if g["target_amount"] else 0,
+            "progress_pct":     round(total_wealth / g["target_amount"] * 100, 1) if g["target_amount"] else 0,
             "months_at_current_rate": months_away,
         })
 
@@ -218,14 +274,21 @@ def _collect_financial_context() -> dict:
         "days_in_month":        days_in_month,
         "accounts":             account_meta,
         "balances": {
-            "personal_eur":  round(bal_personal or 0, 2),
-            "joint_eur":     round(bal_joint, 2),
-            "savings_eur":   round(savings_total, 2),
+            "liquid_bank_eur":    round(api_total, 2),
+            "liquid_savings_eur": round(liquid_savings_total, 2),
+            "liquid_total_eur":   round(liquid_total, 2),
+            "investments_eur":    round(investments_total, 2),
+            "portfolio_eur":      round(portfolio_value, 2),
+            "investment_savings_eur": round(investment_savings_total, 2),
             "savings_accounts": [
-                {"name": r["name"], "type": r["type"], "balance_eur": round(r["balance"], 2)}
+                {
+                    "name": r["name"],
+                    "type": r["type"],
+                    "balance_eur": round(_effective_balance(r), 2),
+                }
                 for _, r in savings_df.iterrows()
             ] if not savings_df.empty else [],
-            "total_eur":     round(total_wealth, 2),
+            "net_worth_eur":   round(total_wealth, 2),
             "change_vs_last_week_eur": wealth_change,
         },
         "runway_months":        runway_months,
