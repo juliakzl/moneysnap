@@ -1093,6 +1093,19 @@ with tab_dashboard:
         set_state("transfers_as_expenses", "1" if new_transfers_as_expenses else "0")
         transfers_as_expenses = new_transfers_as_expenses
         st.rerun()
+    with st.expander("How internal transfers work"):
+        st.markdown(
+            "When you move money between your own accounts (e.g. personal → joint, or to a savings account), "
+            "the same amount appears as a **debit** on one account and a **credit** on the other. "
+            "Without categorization, this inflates both your income and expense totals.\n\n"
+            "**To fix this:** categorize those transactions as `Internal Transfer`. "
+            "The easiest way is to add a keyword rule in `src/finapp/rules.py` that matches "
+            "how your name or account appears in transfer descriptions — for example:\n"
+        )
+        st.code('("YOUR FULL NAME", "Internal Transfer"),', language="python")
+        st.markdown(
+            "Then click **Categorize** — all matching transactions will be excluded from income and spending stats automatically."
+        )
 
     # Split debits into expenses vs investments
     INVESTMENT_CATEGORIES = {"Investments", "Joint Account"}
@@ -1263,10 +1276,14 @@ with tab_dashboard:
 
     # Where is my money going
     st.header("Where is my money going?")
-    include_investments = st.checkbox("Include investments in category charts", value=True, key="cat_include_investments")
+    _cc1, _cc2 = st.columns(2)
+    include_investments = _cc1.checkbox("Include investments", value=True, key="cat_include_investments")
+    include_transfers = _cc2.checkbox("Include internal transfers", value=False, key="cat_include_transfers")
     cat_filter = (all_debits["category"].str.strip() != "")
     if not include_investments:
         cat_filter &= ~all_debits["category"].isin(INVESTMENT_CATEGORIES)
+    if not include_transfers:
+        cat_filter &= all_debits["category"] != TRANSFER_CATEGORY
     this_month_cat = all_debits[
         (all_debits["date"] >= date_from.strftime("%Y-%m-%d")) &
         (all_debits["date"] <= date_to.strftime("%Y-%m-%d")) &
