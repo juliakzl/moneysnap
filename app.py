@@ -1350,6 +1350,14 @@ with tab_dashboard:
                     text=f"€{row['amount_abs']:,.0f}",
                     showarrow=False, yshift=10, font=dict(size=11)
                 )
+            if monthly_budget:
+                fig.add_hline(
+                    y=monthly_budget,
+                    line_dash="dash",
+                    line_color="#e74c3c",
+                    annotation_text=f"Budget €{monthly_budget:,.0f}",
+                    annotation_position="top right",
+                )
             _apply_chart_theme(fig)
             st.plotly_chart(fig, use_container_width=True)
     else:
