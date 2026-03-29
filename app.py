@@ -230,8 +230,9 @@ if _btn2_col.button("🏷️ Categorize", use_container_width=True):
 init_db()
 
 def get_api_key() -> str:
-    """Return the Anthropic API key — DB takes precedence over secrets.toml."""
-    return get_state("anthropic_api_key") or st.secrets.get("anthropic", {}).get("api_key", "") or ""
+    """Return the Anthropic API key — DB takes precedence over secrets.toml. Returns empty string if key looks invalid."""
+    key = get_state("anthropic_api_key") or st.secrets.get("anthropic", {}).get("api_key", "") or ""
+    return key if len(key) > 20 else ""
 
 # One-time migration: seed savings_accounts from old app_state keys if table is empty
 def _migrate_savings():
