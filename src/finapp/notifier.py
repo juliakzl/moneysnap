@@ -8,11 +8,9 @@ import anthropic
 import pandas as pd
 import streamlit as st
 
-from finapp.db import get_transactions, get_budgets, get_state, set_state, get_goals, save_summary, get_savings_accounts
+from finapp.db import get_transactions, get_budgets, get_state, set_state, get_goals, save_summary, get_savings_accounts, get_main_account, get_bank_accounts
 from finapp.banking.fetcher import get_account_balance
 
-PERSONAL_ID  = st.secrets["accounts"]["personal_id"]
-JOINT_EUR_ID = st.secrets["accounts"]["joint_eur_id"]
 INVESTMENT_CATEGORIES = {"Investments", "Joint Account"}
 FIXED_CATEGORIES      = {"Rent", "Subscriptions"}
 
@@ -100,8 +98,11 @@ def _collect_financial_context() -> dict:
     month_str  = now.strftime("%Y-%m")
     last_month = (now - pd.DateOffset(months=1)).strftime("%Y-%m")
 
+    main_account_id = get_main_account()
+    accounts_df = get_bank_accounts()
+
     df = get_transactions()
-    df = df[df["account_id"] == PERSONAL_ID].copy()
+    df = df.copy()
     df["date"]       = pd.to_datetime(df["date"])
     df["month"]      = df["date"].dt.to_period("M").astype(str)
     df["amount_abs"] = df["amount"].abs()
@@ -162,11 +163,12 @@ def _collect_financial_context() -> dict:
         merged = budgets.merge(month_sp, on="category", how="left").fillna(0)
         budget_status = merged.to_dict(orient="records")
 
-    bal_personal  = get_account_balance(PERSONAL_ID)
-    bal_joint     = get_account_balance(JOINT_EUR_ID)
+    bal_personal  = get_account_balance(main_account_id) if main_account_id else 0
+    joint_ids     = accounts_df[accounts_df["is_joint"] == 1]["account_id"].tolist() if not accounts_df.empty and "is_joint" in accounts_df.columns else []
+    bal_joint     = sum(get_account_balance(aid) or 0 for aid in joint_ids)
     savings_df    = get_savings_accounts()
     savings_total = savings_df["balance"].sum() if not savings_df.empty else 0.0
-    total_wealth  = (bal_personal or 0) + (bal_joint or 0) + savings_total
+    total_wealth  = (bal_personal or 0) + bal_joint + savings_total
 
     prev_snapshot = json.loads(get_state("weekly_wealth_snapshot") or "null")
     wealth_change = round(total_wealth - prev_snapshot["total"], 2) if prev_snapshot else None
@@ -196,14 +198,28 @@ def _collect_financial_context() -> dict:
             "months_at_current_rate": months_away,
         })
 
+    account_meta = []
+    if not accounts_df.empty:
+        for _, acc in accounts_df.iterrows():
+            account_meta.append({
+                "name":       acc.get("display_name") or acc["account_id"],
+                "is_main":    bool(acc.get("is_main", 0)),
+                "is_joint":   bool(acc.get("is_joint", 0)),
+                "currency":   acc.get("currency", "EUR"),
+                "note":       "primary account — salary and most day-to-day transactions" if acc.get("is_main", 0) else (
+                              "joint account" if acc.get("is_joint", 0) else "other account"
+                ),
+            })
+
     return {
         "report_date":          str(now.date()),
         "month":                month_str,
         "days_elapsed":         days_elapsed,
         "days_in_month":        days_in_month,
+        "accounts":             account_meta,
         "balances": {
             "personal_eur":  round(bal_personal or 0, 2),
-            "joint_eur":     round(bal_joint    or 0, 2),
+            "joint_eur":     round(bal_joint, 2),
             "savings_eur":   round(savings_total, 2),
             "savings_accounts": [
                 {"name": r["name"], "type": r["type"], "balance_eur": round(r["balance"], 2)}
