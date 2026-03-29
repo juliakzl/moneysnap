@@ -667,6 +667,8 @@ with tab_dashboard:
     snapshots_df = get_wealth_snapshots()
     if len(snapshots_df) > 1:
         snapshots_df["date"] = pd.to_datetime(snapshots_df["date"])
+        # Drop zero-value rows (bad snapshots saved before balances were loaded)
+        snapshots_df = snapshots_df[snapshots_df["net_worth"] > 0]
         # Fill gaps between snapshot dates so chart doesn't drop to zero on missing days
         snapshots_df = (
             snapshots_df.set_index("date")
