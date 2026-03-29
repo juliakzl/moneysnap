@@ -30,7 +30,7 @@ def _chart_header(title: str, info: str, key: str):
     """Render a chart title with a native Streamlit ? tooltip."""
     c1, c2 = st.columns([20, 1])
     c1.markdown(f"**{title}**")
-    c2.checkbox("ℹ", key=key, help=info, label_visibility="collapsed", disabled=True, value=False)
+    c2.checkbox("ℹ", key=key, help=info, value=False)
 
 def get_api_key() -> str:
     """Return the Anthropic API key — DB takes precedence over secrets.toml. Returns empty string if key looks invalid."""
