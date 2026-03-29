@@ -26,12 +26,11 @@ except ImportError:
 
 st.set_page_config(page_title="Finance App", page_icon="💰", layout="wide")
 
-def _chart_header(title: str, info: str):
-    """Render a chart title with a hoverable ℹ icon."""
-    st.markdown(
-        f"{title} &nbsp;<span title='{info}' style='cursor:help;font-size:0.85em;opacity:0.6'>ℹ</span>",
-        unsafe_allow_html=True,
-    )
+def _chart_header(title: str, info: str, key: str):
+    """Render a chart title with a native Streamlit ? tooltip."""
+    c1, c2 = st.columns([20, 1])
+    c1.markdown(f"**{title}**")
+    c2.checkbox("ℹ", key=key, help=info, label_visibility="collapsed", disabled=True, value=False)
 
 def get_api_key() -> str:
     """Return the Anthropic API key — DB takes precedence over secrets.toml. Returns empty string if key looks invalid."""
@@ -208,7 +207,7 @@ def _plotly_theme():
     return dict(template="plotly_white")
 
 def _apply_chart_theme(fig):
-    fig.update_layout(**_plotly_theme())
+    fig.update_layout(**_plotly_theme(), title=None)
     if st.session_state.dark_mode:
         # Force annotation text to high contrast (annotations inherit from font but some charts override)
         for ann in fig.layout.annotations:
@@ -708,7 +707,7 @@ with tab_dashboard:
             "date", var_name="type", value_name="amount"
         )
         chart_data["type"] = chart_data["type"].map({"liquid": "Liquid", "investments": "Investments"})
-        _chart_header("Net Worth Over Time", "Liquid = sum of all bank account balances + flexible savings accounts. Investments = portfolio value (market price × shares) + non-flexible savings. Net worth = Liquid + Investments. Daily snapshots are saved once per day when the app is open; gaps are forward-filled from the last known value.")
+        _chart_header("Net Worth Over Time", "Liquid = sum of all bank account balances + flexible savings accounts. Investments = portfolio value (market price × shares) + non-flexible savings. Net worth = Liquid + Investments. Daily snapshots are saved once per day when the app is open; gaps are forward-filled from the last known value.", "info_nw")
         fig = px.area(chart_data, x="date", y="amount", color="type",
                       labels={"amount": "€", "date": ""},
                       color_discrete_map={"Liquid": "#3498db", "Investments": "#2ecc71"})
@@ -761,7 +760,7 @@ with tab_dashboard:
                 if _mom_period not in ("All time", "Custom") and len(monthly_display) < int(_mom_period.split()[1]):
                     st.caption(f"Showing all available data: {_actual_from} → {_actual_to}")
 
-                _chart_header("Month-over-Month Net Worth Growth (%)", "Compares the last net worth snapshot of each month to the previous month. Green = growth, red = decline. Hover to see the absolute € change.")
+                _chart_header("Month-over-Month Net Worth Growth (%)", "Compares the last net worth snapshot of each month to the previous month. Green = growth, red = decline. Hover to see the absolute € change.", "info_mom")
                 fig_mom = px.bar(
                     monthly_display, x="month_str", y="growth_pct",
                     labels={"month_str": "", "growth_pct": "%"},
@@ -1288,7 +1287,7 @@ with tab_dashboard:
     ).reset_index()
     monthly.columns = ["month", "type", "amount"]
 
-    _chart_header("Monthly Income vs Expenses", "Income = all credit transactions excluding Internal Transfers. Expenses = all debit transactions excluding Investments and (optionally) Internal Transfers. Grouped by calendar month.")
+    _chart_header("Monthly Income vs Expenses", "Income = all credit transactions excluding Internal Transfers. Expenses = all debit transactions excluding Investments and (optionally) Internal Transfers. Grouped by calendar month.", "info_monthly")
     fig = px.bar(monthly, x="month", y="amount", color="type",
                  barmode="group",
                  color_discrete_map={"credit": "#2ecc71", "debit": "#e74c3c"})
@@ -1313,7 +1312,7 @@ with tab_dashboard:
     if not this_month_cat.empty:
         cat_data = (this_month_cat.groupby("category")["amount_abs"].sum().reset_index())
         cat_data.columns = ["category", "amount"]
-        _chart_header(f"Spending by Category — {range_label}", "Debit transactions in the selected period grouped by category. Investments and Internal Transfers can be toggled with the checkboxes above. Uncategorized transactions are excluded.")
+        _chart_header(f"Spending by Category — {range_label}", "Debit transactions in the selected period grouped by category. Investments and Internal Transfers can be toggled with the checkboxes above. Uncategorized transactions are excluded.", "info_pie")
         fig = px.pie(cat_data, values="amount", names="category")
         _apply_chart_theme(fig)
         st.plotly_chart(fig, use_container_width=True)
@@ -1340,7 +1339,7 @@ with tab_dashboard:
             .sum().reset_index()
         )
         if not cat_monthly.empty:
-            _chart_header("Monthly Expenses by Category", "Stacked bars show how spending is distributed across categories each month. Each segment is the sum of debit transactions in that category for that month. Same filters as the pie chart above apply.")
+            _chart_header("Monthly Expenses by Category", "Stacked bars show how spending is distributed across categories each month. Each segment is the sum of debit transactions in that category for that month. Same filters as the pie chart above apply.", "info_cat_monthly")
             fig = px.bar(cat_monthly, x="month", y="amount_abs", color="category",
                          barmode="stack",
                          labels={"amount_abs": "Amount (€)", "month": "Month"})
