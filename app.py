@@ -1629,7 +1629,6 @@ with tab_banks:
                                     "category": "Investments",
                                     "type": "debit" if _amt < 0 else "credit",
                                 })
-                            from db import upsert_transactions
                             upsert_transactions(_main_tx_rows)
 
                         # Update TR cash balance in savings_accounts
