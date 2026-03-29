@@ -1,6 +1,6 @@
 # Finance App
 
-A personal finance dashboard that connects to your real bank accounts via Open Banking (PSD2), tracks spending and investments, and lets you chat with an AI agent about your finances. All data is stored locally — nothing leaves your machine except the API calls you explicitly trigger.
+A personal finance dashboard that connects to your real bank accounts via Open Banking (PSD2), tracks spending and investments, and lets you chat with an AI agent about your finances. All data is stored locally — nothing leaves your machine except the API calls you explicitly trigger. Works best with Revolut & Trade Republic combination.
 
 ## What you get
 
@@ -54,7 +54,20 @@ cd moneysnap
 uv sync
 ```
 
-### 2. Generate an RSA key pair
+### 2. Set up your Enable Banking application
+
+Enable Banking is the PSD2 aggregator that handles bank OAuth. You need a registered application to get an `app_id` and to upload your public key.
+
+1. Sign up at [enablebanking.com](https://enablebanking.com) and log in to the dashboard
+2. Go to **Applications** → **Create application**
+3. Give it a name (e.g. "Finance App") and choose the environment:
+   - **Sandbox** — connects to test banks, no real data, good for trying things out
+   - **Production** — connects to real banks; may require a brief manual review by Enable Banking before approval
+4. Set the **Redirect URI** to `http://localhost:3000` — this is where the OAuth callback lands during bank connection
+5. Copy your **Application ID** (a UUID shown in the application detail page) — you'll need it for `secrets.toml`
+6. Generate an RSA key pair (next step) and come back to upload the public key under **Keys** in your application settings
+
+### 3. Generate an RSA key pair
 
 Enable Banking uses asymmetric key authentication. Generate a key pair:
 
@@ -63,10 +76,10 @@ openssl genrsa -out private_prod.pem 2048
 openssl rsa -in private_prod.pem -pubout -out public_prod.pem
 ```
 
-- Upload `public_prod.pem` to your Enable Banking dashboard under your application settings
+- In the Enable Banking dashboard, open your application → **Keys** → upload `public_prod.pem`
 - Keep `private_prod.pem` in the project root — **never commit it** (it's in `.gitignore`)
 
-### 3. Create your secrets file
+### 4. Create your secrets file
 
 Copy the example and fill in your values:
 
@@ -99,7 +112,7 @@ app_password = "xxxx xxxx xxxx xxxx"   # Gmail App Password (not your login pass
                                         # Generate at myaccount.google.com → Security → App passwords
 ```
 
-### 4. Set up your categorization rules
+### 5. Set up your categorization rules
 
 ```bash
 cp src/finapp/rules.example.py src/finapp/rules.py
@@ -109,7 +122,7 @@ Edit `src/finapp/rules.py` and add keyword → category rules for your own merch
 
 **Important:** add a rule matching your own name as it appears in bank transfer descriptions and assign it to `"Internal Transfer"` — this prevents transfers between your own accounts from inflating income and expense totals.
 
-### 5. Start the app
+### 6. Start the app
 
 ```bash
 uv run streamlit run app.py
