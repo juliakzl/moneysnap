@@ -664,6 +664,14 @@ with tab_dashboard:
     snapshots_df = get_wealth_snapshots()
     if len(snapshots_df) > 1:
         snapshots_df["date"] = pd.to_datetime(snapshots_df["date"])
+        # Fill gaps between snapshot dates so chart doesn't drop to zero on missing days
+        snapshots_df = (
+            snapshots_df.set_index("date")
+            .resample("D")
+            .last()
+            .ffill()
+            .reset_index()
+        )
 
         _wc1, _wc2, _wc3 = st.columns([2, 2, 4])
         _nw_period = _wc1.selectbox(
