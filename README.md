@@ -84,12 +84,6 @@ user_name = "Your Name"
 
 [enable_banking]
 app_id = "your-app-uuid"       # from enablebanking.com → your application
-session_id = ""                # leave blank for now; filled in step 5
-
-[accounts]
-personal_id = ""               # leave blank for now; filled in step 5
-joint_eur_id = ""              # optional — remove if you don't have a joint account
-joint_gbp_id = ""              # optional — remove if you don't have a joint account
 
 [anthropic]
 api_key = "sk-ant-..."         # from console.anthropic.com — optional, enables AI features
@@ -105,20 +99,15 @@ app_password = "xxxx xxxx xxxx xxxx"   # Gmail App Password (not your login pass
                                         # Generate at myaccount.google.com → Security → App passwords
 ```
 
-### 4. Run the initial bank OAuth flow
-
-This one-time script authenticates with Enable Banking, starts the OAuth flow with your bank, and prints the `session_id` and account IDs you need for secrets.toml:
+### 4. Set up your categorization rules
 
 ```bash
-uv run python src/finapp/banking/fetch_accounts.py
+cp src/finapp/rules.example.py src/finapp/rules.py
 ```
 
-It will:
-1. Print an authorization URL — open it in your browser
-2. You'll be redirected to your bank's login page (e.g. Revolut)
-3. After authorizing, you'll be redirected to `https://localhost:3000/callback?code=...`
-4. Paste the full redirect URL back into the terminal
-5. The script prints your `session_id` and account UUIDs — copy them into `secrets.toml`
+Edit `src/finapp/rules.py` and add keyword → category rules for your own merchants. This file is gitignored — it won't be overwritten when you pull updates.
+
+**Important:** add a rule matching your own name as it appears in bank transfer descriptions and assign it to `"Internal Transfer"` — this prevents transfers between your own accounts from inflating income and expense totals.
 
 ### 5. Start the app
 
@@ -140,7 +129,7 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 4. **Set your monthly salary** — Dashboard → Income & Spending → "Set monthly net salary"
 5. **Set a monthly budget** — Dashboard → Income & Spending → "Set monthly expense budget"
 6. **Set a financial goal** — Dashboard → Goals → add a goal with a target amount
-7. **Configure categories** — Settings → Transaction Categories → add your categories; then edit `src/finapp/rules.py` to add keyword → category rules for automatic matching
+7. **Configure categories** — Settings → Transaction Categories → add your categories; then edit `src/finapp/rules.py` to add keyword → category rules for automatic matching (copy from `rules.example.py` if you haven't already)
 8. **Add Anthropic API key** — in `secrets.toml` under `[anthropic]` — enables AI chat and auto-categorization
 9. **Set up email summaries** (optional) — requires a Gmail App Password (not your regular login password):
    1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
@@ -152,7 +141,13 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 
 ## Configuring transaction rules
 
-`src/finapp/rules.py` contains keyword rules for automatic transaction categorization. Rules are matched case-insensitively against the merchant name:
+Copy the example file and customize it:
+
+```bash
+cp src/finapp/rules.example.py src/finapp/rules.py
+```
+
+`src/finapp/rules.py` is gitignored — it won't be overwritten when you pull updates. Edit it to add keyword → category mappings for your own merchants:
 
 ```python
 RULES = [
@@ -163,9 +158,9 @@ RULES = [
 ]
 ```
 
-Rules run before AI categorization — anything not matched by a rule gets sent to Claude (if API key is set). You can also manually edit categories inline in the Transactions tab.
+Rules are matched case-insensitively against the transaction merchant name and run before AI categorization — anything not matched gets sent to Claude (if API key is set). You can also manually edit categories inline in the Transactions tab.
 
-**Important:** Add a rule matching your own name as it appears in bank transfers (e.g. transfers to your own savings accounts) and assign it to `"Internal Transfer"` — this prevents double-counting in spending stats.
+**Important:** Add a rule matching your own name as it appears in bank transfer descriptions and assign it to `"Internal Transfer"` — this prevents transfers between your own accounts from double-counting in income and spending stats.
 
 ---
 
@@ -182,7 +177,7 @@ Rules run before AI categorization — anything not matched by a rule gets sent 
 ## Troubleshooting
 
 **App crashes on startup with a KeyError on secrets**
-→ Check that all required fields in `secrets.toml` are filled in. The `[enable_banking]` and `[accounts]` sections are required even if values are blank strings.
+→ Check that `[enable_banking]` with `app_id` is present in `secrets.toml`. All other sections are optional.
 
 **"No transactions yet" on the dashboard**
 → Go to the Banks tab, connect your bank, then click "Sync transactions".

@@ -7,7 +7,10 @@ import streamlit as st
 from finapp.config import DB_PATH
 from finapp.db import get_uncategorized_merchants, bulk_set_categories, get_state, get_goals, get_savings_accounts
 from finapp.banking.fetcher import get_account_balance
-from finapp.rules import RULES
+try:
+    from finapp.rules import RULES
+except ImportError:
+    RULES = []
 
 PERSONAL_ID  = st.secrets["accounts"]["personal_id"]
 JOINT_EUR_ID = st.secrets["accounts"]["joint_eur_id"]

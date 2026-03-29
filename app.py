@@ -19,7 +19,10 @@ from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_ba
 from finapp.investments.etf_catalog import ETF_CATALOG
 from finapp.notifier import send_summary_email, DEFAULT_WEEKLY_PROMPT, DEFAULT_MONTHLY_PROMPT
 from finapp.agent import run_agent, auto_categorize, apply_rules
-from finapp.rules import RULES as _CATEGORIZATION_RULES
+try:
+    from finapp.rules import RULES as _CATEGORIZATION_RULES
+except ImportError:
+    _CATEGORIZATION_RULES = []
 
 st.set_page_config(page_title="Finance App", page_icon="💰", layout="wide")
 
@@ -512,9 +515,9 @@ with tab_setup:
             if _ob_cats:
                 st.caption("Added: " + " · ".join(_ob_cats))
             st.divider()
-            st.caption("Also edit `src/finapp/rules.py` to map merchant keywords to categories automatically:")
-            st.code('RULES = [\n    ("your landlord name", "Rent"),\n    ("edeka", "Groceries"),\n    ("spotify", "Subscriptions"),\n    # your own name in transfers:\n    ("your full name", "Internal Transfer"),\n]', language="python")
-            st.caption("Keyword rules run before AI categorization. Anything unmatched is sent to Claude (if API key is set).")
+            st.caption("Copy `src/finapp/rules.example.py` → `src/finapp/rules.py` and customize it with your merchant keywords:")
+            st.code('cp src/finapp/rules.example.py src/finapp/rules.py', language="bash")
+            st.caption("Keyword rules run before AI categorization. Anything unmatched is sent to Claude (if API key is set). Your `rules.py` is gitignored and won't be overwritten by updates.")
 
     # Step 7: Anthropic API key
     with st.container(border=True):
@@ -1839,5 +1842,14 @@ with tab_settings:
         "Rules automatically assign a category when a transaction's merchant name contains a keyword "
         "(case-insensitive). They run before AI categorization — anything unmatched is sent to Claude."
     )
-    st.info("To add or edit rules, open `src/finapp/rules.py` in your editor.", icon="✏️")
+    if not _CATEGORIZATION_RULES:
+        st.warning(
+            "No `rules.py` found. Copy `src/finapp/rules.example.py` to `src/finapp/rules.py` "
+            "and customize it with your own merchant keywords.",
+            icon="⚠️",
+        )
+    else:
+        st.info(f"{len(_CATEGORIZATION_RULES)} rule(s) loaded from `src/finapp/rules.py`. Edit that file to add or remove rules, then restart the app.", icon="✏️")
+        _rules_df = pd.DataFrame(_CATEGORIZATION_RULES, columns=["Keyword", "Category"])
+        st.dataframe(_rules_df, use_container_width=True, hide_index=True)
 

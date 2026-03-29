@@ -13,6 +13,9 @@
 .env
 .env.*
 
+# User-specific categorization rules (copy from rules.example.py)
+src/finapp/rules.py
+
 # Python
 __pycache__/
 *.py[cod]
