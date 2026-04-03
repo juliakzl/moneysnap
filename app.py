@@ -15,7 +15,7 @@ from finapp.db import (init_db, get_transactions, upsert_transactions, get_state
 from finapp.investments.tr_fetcher import (tr_is_logged_in, tr_initiate_weblogin,
                                            tr_complete_weblogin, tr_sync)
 import yfinance as yf
-from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots
+from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots, restore_session
 from finapp.investments.etf_catalog import ETF_CATALOG
 from finapp.notifier import send_summary_email, DEFAULT_WEEKLY_PROMPT, DEFAULT_MONTHLY_PROMPT
 from finapp.agent import run_agent, auto_categorize, apply_rules
@@ -33,8 +33,14 @@ def _chart_header(title: str, info: str, key: str):
     c2.checkbox("ℹ", key=key, help=info, value=False)
 
 def get_api_key() -> str:
-    """Return the Anthropic API key — DB takes precedence over secrets.toml. Returns empty string if key looks invalid."""
-    key = get_state("anthropic_api_key") or st.secrets.get("anthropic", {}).get("api_key", "") or ""
+    """Return the Anthropic API key — session state takes precedence over secrets.toml."""
+    if "_anthropic_api_key" not in st.session_state:
+        # One-time migration: move key from DB to session state and clear from DB
+        db_key = get_state("anthropic_api_key")
+        if db_key and len(db_key) > 20:
+            st.session_state["_anthropic_api_key"] = db_key
+            set_state("anthropic_api_key", "")
+    key = st.session_state.get("_anthropic_api_key") or st.secrets.get("anthropic", {}).get("api_key", "") or ""
     return key if len(key) > 20 else ""
 
 if "dark_mode" not in st.session_state:
@@ -245,6 +251,19 @@ init_db()
 
 
 # One-time migration: seed savings_accounts from old app_state keys if table is empty
+def _migrate_bank_from_secrets():
+    """One-time migration: if secrets.toml has a session_id but DB has no connections, import them."""
+    if not get_bank_connections().empty:
+        return
+    session_id = st.secrets.get("enable_banking", {}).get("session_id", "")
+    if not session_id or len(session_id) < 10:
+        return
+    try:
+        restore_session(session_id)
+    except Exception:
+        pass  # silently skip — user can connect via UI
+
+
 def _migrate_savings():
     existing = get_savings_accounts()
     if not existing.empty:
@@ -258,6 +277,7 @@ def _migrate_savings():
         upsert_savings_account(name="Trade Republic", type="brokerage", balance=float(tr),
                                notes="TR brokerage — ETFs/stocks")
 
+_migrate_bank_from_secrets()
 _migrate_savings()
 
 # --- Onboarding state (computed before st.tabs so we can show progress in the tab label) ---
@@ -383,10 +403,11 @@ with tab_setup:
             _ob_conn_label = _of3.text_input("Label (e.g. My Revolut)", key="_ob_conn_label")
             if st.button("Get authorization link", key="_ob_get_auth") and _ob_sel_bank and _ob_sel_country:
                 try:
-                    _ob_auth_url = initiate_auth(bank_name=_ob_sel_bank, bank_country=_ob_sel_country)
+                    _ob_auth_url, _ob_state = initiate_auth(bank_name=_ob_sel_bank, bank_country=_ob_sel_country)
                     st.session_state._ob_pending_auth = {
                         "url": _ob_auth_url, "bank": _ob_sel_bank,
                         "country": _ob_sel_country, "label": _ob_conn_label or _ob_sel_bank,
+                        "state": _ob_state,
                     }
                 except Exception as e:
                     st.error(f"Failed to start authorization: {e}")
@@ -402,6 +423,7 @@ with tab_setup:
                             bank_name=_auth["bank"],
                             bank_country=_auth["country"],
                             display_name=_auth["label"],
+                            expected_state=_auth.get("state"),
                         )
                         del st.session_state._ob_pending_auth
                         st.success(f"Connected! Found {_n_accs} account(s). You can rename them in the Banks tab.")
@@ -1748,10 +1770,11 @@ with tab_banks:
 
     if st.button("Get authorization link") and selected_bank and selected_country:
         try:
-            url = initiate_auth(bank_name=selected_bank, bank_country=selected_country)
+            url, _state = initiate_auth(bank_name=selected_bank, bank_country=selected_country)
             st.session_state.pending_auth = {
                 "url": url, "bank": selected_bank,
                 "country": selected_country, "label": display_name or selected_bank,
+                "state": _state,
             }
         except Exception as e:
             st.error(f"Failed to start authorization: {e}")
@@ -1768,6 +1791,7 @@ with tab_banks:
                     bank_name=auth["bank"],
                     bank_country=auth["country"],
                     display_name=auth["label"],
+                    expected_state=auth.get("state"),
                 )
                 del st.session_state.pending_auth
                 st.success(f"Connected! Found {n_accs} account(s). You can rename them above.")
@@ -1813,13 +1837,13 @@ with tab_settings:
     if _settings_api_key:
         st.success("Anthropic API key is set.")
         if st.button("Remove key", key="_settings_remove_key"):
-            set_state("anthropic_api_key", "")
+            st.session_state.pop("_anthropic_api_key", None)
             st.rerun()
     else:
         st.caption("Paste your Anthropic API key to enable AI chat and auto-categorization. Get one at [console.anthropic.com](https://console.anthropic.com).")
         _settings_key_input = st.text_input("Anthropic API key", type="password", placeholder="sk-ant-...", key="_settings_api_key_input")
         if st.button("Save key", key="_settings_save_key") and _settings_key_input.strip():
-            set_state("anthropic_api_key", _settings_key_input.strip())
+            st.session_state["_anthropic_api_key"] = _settings_key_input.strip()
             st.rerun()
 
     st.divider()

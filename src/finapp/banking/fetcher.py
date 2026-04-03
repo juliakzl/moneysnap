@@ -1,6 +1,7 @@
 import jwt
 import time
 import json
+import secrets
 import requests
 from urllib.parse import urlparse, parse_qs
 from finapp.config import APP_ID, BASE_URL, PRIVATE_KEY_PATH, REDIRECT_URL
@@ -40,29 +41,34 @@ def list_banks(country: str = None) -> list[dict]:
 
 # --- OAuth flow ---
 
-def initiate_auth(bank_name: str, bank_country: str) -> str:
-    """Start OAuth for a bank. Returns the authorization URL to show to the user."""
+def initiate_auth(bank_name: str, bank_country: str) -> tuple[str, str]:
+    """Start OAuth for a bank. Returns (authorization_url, state_token)."""
     valid_until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 90 * 86400))
+    state = secrets.token_urlsafe(32)
     payload = {
         "access": {"valid_until": valid_until},
         "aspsp": {"name": bank_name, "country": bank_country},
-        "state": "finance-app",
+        "state": state,
         "redirect_url": REDIRECT_URL,
         "psu_type": "personal",
     }
     resp = requests.post(f"{BASE_URL}/auth", headers=_headers(), json=payload)
     resp.raise_for_status()
-    return resp.json()["url"]
+    return resp.json()["url"], state
 
 
 def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
-                  display_name: str) -> tuple[str, int]:
+                  display_name: str, expected_state: str = None) -> tuple[str, int]:
     """
     Exchange the auth code from the redirect URL for a session.
     Discovers accounts and saves everything to the DB.
     Returns (session_id, number_of_accounts_found).
     """
     parsed = urlparse(redirect_url)
+    if expected_state is not None:
+        actual_state = parse_qs(parsed.query).get("state", [None])[0]
+        if actual_state != expected_state:
+            raise ValueError("OAuth state mismatch — possible CSRF attempt. Please try connecting again.")
     code = parse_qs(parsed.query).get("code", [None])[0]
     if not code:
         raise ValueError("No authorization code found in the redirect URL.")
@@ -118,6 +124,60 @@ def complete_auth(redirect_url: str, bank_name: str, bank_country: str,
                             display_name=acc_label, iban=iban, currency=currency)
 
     return session_id, len(raw_accounts)
+
+
+# --- Session restore (migration from secrets.toml) ---
+
+def restore_session(session_id: str) -> int:
+    """
+    Import an existing Enable Banking session into the DB.
+    Calls GET /sessions/{session_id} to discover accounts, then writes to
+    bank_connections and bank_accounts. Returns number of accounts imported.
+    Used to migrate users who ran fetch_accounts.py and stored session_id in secrets.toml.
+    """
+    resp = requests.get(f"{BASE_URL}/sessions/{session_id}", headers=_headers())
+    resp.raise_for_status()
+    session_data = resp.json()
+
+    aspsp = session_data.get("aspsp", {}) or {}
+    bank_name = aspsp.get("name", "") or "Imported Bank"
+    bank_country = aspsp.get("country", "") or ""
+    raw_accounts = session_data.get("accounts", [])
+
+    add_bank_connection(
+        session_id=session_id,
+        bank_name=bank_name,
+        bank_country=bank_country,
+        display_name=bank_name,
+    )
+
+    for i, acc in enumerate(raw_accounts):
+        if isinstance(acc, dict):
+            account_id = acc.get("uid", "")
+            currency = acc.get("currency", "")
+            acc_id_obj = acc.get("account_id", {}) or {}
+            iban = acc_id_obj.get("iban", "") or ""
+            if not iban:
+                for id_entry in acc.get("all_account_ids") or []:
+                    if id_entry.get("scheme_name") == "IBAN":
+                        iban = id_entry.get("identification", "")
+                        break
+        else:
+            account_id = str(acc)
+            currency = ""
+            iban = ""
+
+        if iban:
+            acc_label = f"{bank_name} ({iban[-4:]})"
+        else:
+            acc_label = f"{bank_name} {i + 1}"
+        if currency:
+            acc_label += f" {currency}"
+
+        upsert_bank_account(account_id=account_id, session_id=session_id,
+                            display_name=acc_label, iban=iban, currency=currency)
+
+    return len(raw_accounts)
 
 
 # --- Account / balance helpers ---

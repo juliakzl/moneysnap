@@ -1,8 +1,7 @@
 import jwt, time, requests
+from finapp.config import APP_ID, PRIVATE_KEY_PATH
 
-APP_ID = "7b9ead7b-7efe-4d06-a1dd-51f03da5676e"
-
-with open("private_prod.pem") as f:
+with open(PRIVATE_KEY_PATH) as f:
     private_key = f.read()
 
 token = jwt.encode(
