@@ -5,15 +5,26 @@ import pandas as pd
 import sqlite3
 import streamlit as st
 from finapp.config import DB_PATH
-from finapp.db import get_uncategorized_merchants, bulk_set_categories, get_state, get_goals, get_savings_accounts
+from finapp.db import get_uncategorized_merchants, bulk_set_categories, get_state, get_goals, get_savings_accounts, get_main_account, get_bank_accounts
 from finapp.banking.fetcher import get_account_balance
 try:
     from finapp.rules import RULES
 except ImportError:
     RULES = []
 
-PERSONAL_ID  = st.secrets["accounts"]["personal_id"]
-JOINT_EUR_ID = st.secrets["accounts"]["joint_eur_id"]
+
+def _get_personal_id() -> str | None:
+    return get_main_account()
+
+
+def _get_joint_eur_id() -> str | None:
+    accs = get_bank_accounts()
+    if accs.empty:
+        return None
+    joint = accs[(accs.get("is_joint", 0) == 1) & (accs.get("currency", "") == "EUR")]
+    if joint.empty:
+        joint = accs[accs.get("is_joint", 0) == 1]
+    return joint.iloc[0]["account_id"] if not joint.empty else None
 
 
 def get_conn():
@@ -128,8 +139,8 @@ def get_budget_status():
 
 def get_wealth_snapshot():
     """Return current balances, allocation, and savings context."""
-    bal_personal = get_account_balance(PERSONAL_ID)
-    bal_joint    = get_account_balance(JOINT_EUR_ID)
+    bal_personal = get_account_balance(_get_personal_id()) if _get_personal_id() else None
+    bal_joint    = get_account_balance(_get_joint_eur_id()) if _get_joint_eur_id() else None
 
     savings_df    = get_savings_accounts()
     savings_total = savings_df["balance"].sum() if not savings_df.empty else 0.0
@@ -139,12 +150,13 @@ def get_wealth_snapshot():
         return round(val / total * 100, 1) if total else 0
 
     # Average monthly savings over last 3 months
+    _personal_id = _get_personal_id()
     with get_conn() as conn:
         df = pd.read_sql("""
             SELECT date, amount, type FROM transactions
             WHERE date >= date('now', '-3 months')
               AND account_id = ?
-        """, conn, params=[PERSONAL_ID])
+        """, conn, params=[_personal_id]) if _personal_id else pd.DataFrame()
 
     avg_monthly_savings = 0
     if not df.empty:
@@ -162,7 +174,7 @@ def get_wealth_snapshot():
             SELECT amount FROM transactions
             WHERE type='debit' AND date >= date('now', '-3 months')
               AND account_id = ?
-        """, conn, params=[PERSONAL_ID])
+        """, conn, params=[_personal_id]) if _personal_id else pd.DataFrame()
     if not exp_df.empty:
         mean_val = exp_df["amount"].abs().mean()
         avg_monthly_expenses = round(mean_val * 30, 2) if pd.notna(mean_val) else None
