@@ -44,7 +44,7 @@ Before you start, you'll need:
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — Python package manager
 - **Python 3.14+** (uv will handle this automatically)
 - **An Enable Banking account** — free tier works; needed to connect any PSD2-supported bank (Revolut, N26, most EU banks). Sign up at [enablebanking.com](https://enablebanking.com).
-- **An RSA key pair** — used to authenticate with Enable Banking (instructions below)
+- **An Enable Banking private key** — generated when you create an application in the Enable Banking dashboard (instructions below)
 - Optionally: **Anthropic API key** (for AI chat + categorization), **Trade Republic account**, **Gmail** (for email summaries)
 
 ---
@@ -61,30 +61,38 @@ uv sync
 
 ### 2. Set up your Enable Banking application
 
-Enable Banking is the PSD2 aggregator that handles bank OAuth. You need a registered application to get an `app_id` and to upload your public key.
+Enable Banking is the PSD2 aggregator that handles bank OAuth. You need a registered application to get an `app_id` and a private key.
 
 1. Sign up at [enablebanking.com](https://enablebanking.com) and log in to the dashboard
-2. Go to **Applications** → **Create application**
-3. Give it a name (e.g. "Finance App") and choose the environment:
-   - **Sandbox** — connects to test banks, no real data, good for trying things out
-   - **Production** — connects to real banks; may require a brief manual review by Enable Banking before approval
-4. Set the **Redirect URI** to `http://localhost:3000` — this is where the OAuth callback lands during bank connection
-5. Copy your **Application ID** (a UUID shown in the application detail page) — you'll need it for `secrets.toml`
-6. Generate an RSA key pair (next step) and come back to upload the public key under **Keys** in your application settings
+2. Go to **API Applications** → **Add a new application**
+3. Fill in the application form:
+   - **Environment:** Production
+   - **RSA Key:** select "Generate in browser" — Enable Banking generates the key pair for you
+   - **Name:** e.g. "Money Snap"
+   - **Redirect URI:** `https://localhost:3000/callback`
+   - **Description:** e.g. "Private finance app"
+   - **Email for data protection:** your email address
+   - **Privacy URL / Terms URL:** `https://localhost:3000/callback` (placeholder is fine)
+4. Click **Register** — the private key downloads automatically at this point
+5. Save the downloaded file as `private_prod.pem` in the project root — **never commit it** (it's in `.gitignore`)
+6. Copy your **Application ID** (UUID on the application detail page) — you'll need it for `secrets.toml`
 
-### 3. Generate an RSA key pair
+> **Important:** The private key is shown only once. If you lose it, you'll need to create a new application.
 
-Enable Banking uses asymmetric key authentication. Generate a key pair:
+**Activate your application** (required before the API will work):
 
-```bash
-openssl genrsa -out private_prod.pem 2048
-openssl rsa -in private_prod.pem -pubout -out public_prod.pem
-```
+Enable Banking requires you to link at least one account via their dashboard before your application status changes from Inactive to Active. This is a one-time step — you will connect your bank again inside the Money Snap app later, and that is the connection the app actually uses.
 
-- In the Enable Banking dashboard, open your application → **Keys** → upload `public_prod.pem`
-- Keep `private_prod.pem` in the project root — **never commit it** (it's in `.gitignore`)
+1. In your newly created application, click **Activate by linking accounts**
+2. Select your country, bank, and **Personal** under usage type — click **Link**
+3. You will be redirected to an authorization page — click **Continue authentication**
+4. Complete your bank's authentication (you'll likely need to confirm via your banking app)
+5. Select the accounts to share and click **Authorize**
+6. Once done, you'll be redirected back to Enable Banking — your application should now show **Active**
 
-### 4. Create your secrets file
+
+
+### 3. Create your secrets file
 
 Copy the example and fill in your values:
 
@@ -117,7 +125,7 @@ app_password = "xxxx xxxx xxxx xxxx"   # Gmail App Password (not your login pass
                                         # Generate at myaccount.google.com → Security → App passwords
 ```
 
-### 5. Set up your categorization rules
+### 4. Set up your categorization rules
 
 ```bash
 cp src/finapp/rules.example.py src/finapp/rules.py
@@ -127,7 +135,7 @@ Edit `src/finapp/rules.py` and add keyword → category rules for your own merch
 
 **Important:** add a rule matching your own name as it appears in bank transfer descriptions and assign it to `"Internal Transfer"` — this prevents transfers between your own accounts from inflating income and expense totals.
 
-### 6. Start the app
+### 5. Start the app
 
 ```bash
 uv run streamlit run app.py
@@ -141,7 +149,7 @@ Opens at **http://localhost:8501**
 
 Once the app is running, work through these steps (the **Get Started** tab walks you through them):
 
-1. **Connect your bank** — Banks tab → add connection → authorize via OAuth → sync transactions
+1. **Connect your bank** — go to the Banks tab → select your country and bank → click "Get authorization link" → authorize in your bank's interface. Your browser will then redirect to `https://localhost:3000/callback?code=...` and show a connection error — **that's expected**. Copy the full URL from the address bar and paste it into the app to complete the connection. Then click "Sync transactions".
 2. **Connect Trade Republic** (optional) — Banks tab → Trade Republic section → log in with your phone number and PIN
 3. **Add investment portfolio** — if not using Trade Republic, go to Settings → Assets → add positions by ticker symbol
 4. **Set your monthly salary** — Dashboard → Income & Spending → "Set monthly net salary"
@@ -185,7 +193,7 @@ Rules are matched case-insensitively against the transaction merchant name and r
 ## Security notes
 
 - `finance.db` — contains real transaction data, never committed (in `.gitignore`)
-- `private_prod.pem` / `private.pem` — RSA private keys, never committed
+- `private_prod.pem` — RSA private key provided by Enable Banking, never committed
 - `.streamlit/secrets.toml` — all credentials, never committed
 - `config.py` — non-secret config only (URLs, file paths)
 - The repo should stay **private** on GitHub
