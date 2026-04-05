@@ -150,7 +150,7 @@ Opens at **http://localhost:8501**
 Once the app is running, work through these steps (the **Get Started** tab walks you through them):
 
 1. **Connect your bank** — go to the Banks tab → select your country and bank → click "Get authorization link" → authorize in your bank's interface. Your browser will then redirect to `https://localhost:3000/callback?code=...` and show a connection error — **that's expected**. Copy the full URL from the address bar and paste it into the app to complete the connection. Then click "Sync transactions".
-2. **Connect Trade Republic** (optional) — Banks tab → Trade Republic section → log in with your phone number and PIN
+2. **Connect Trade Republic** (optional) — see [Trade Republic setup](#trade-republic-setup) below
 3. **Add investment portfolio** — if not using Trade Republic, go to Settings → Assets → add positions by ticker symbol
 4. **Set your monthly salary** — Dashboard → Income & Spending → "Set monthly net salary"
 5. **Set a monthly budget** — Dashboard → Income & Spending → "Set monthly expense budget"
@@ -162,6 +162,34 @@ Once the app is running, work through these steps (the **Get Started** tab walks
    2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
    3. Create a new app password — name it anything (e.g. "Finance App")
    4. Copy the generated 16-character password and paste it into `secrets.toml` under `[email] app_password`
+
+---
+
+## Trade Republic setup
+
+Trade Republic integration syncs your portfolio positions and trade history directly from your TR account.
+
+### 1. Add credentials to secrets.toml
+
+```toml
+[trade_republic]
+phone_no = "+4917612345678"   # your full phone number including country code
+pin = "1234"                  # your 4-digit Trade Republic PIN
+```
+
+Restart the app after saving.
+
+### 2. Log in inside the app
+
+Go to the **Banks** tab → scroll down to the **Trade Republic** section:
+
+1. Click **Send login code to TR app / SMS** — Trade Republic sends a 4-digit confirmation code to your TR app or via SMS
+2. Enter the code and click **Confirm code**
+3. Once connected, click **Sync portfolio** to import your positions and trade history
+
+The session is saved as a cookie (`~/.pytr/`) so you won't need to log in again unless the session expires. If it does, a "Re-login" button appears in the same section.
+
+> **Note:** Trade Republic uses 2FA by design — your PIN alone is not enough. The 4-digit code step is always required on first login.
 
 ---
 
