@@ -13,6 +13,11 @@ A personal finance dashboard that connects to your real bank accounts via Open B
 - **Banks** — connect bank accounts via OAuth, sync Trade Republic portfolio
 - **Settings** — manage categories, rules, salary, budgets, email summaries
 
+![Screenshot](assets/moneysnap_dashboard.png)
+![Screenshot](assets/moneysnap_spend_graph.png)
+
+
+
 ---
 
 ## Quick start
