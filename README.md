@@ -161,8 +161,9 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 5. **Set a monthly budget** — Dashboard → Income & Spending → "Set monthly expense budget"
 6. **Set a financial goal** — Dashboard → Goals → add a goal with a target amount
 7. **Configure categories** — Settings → Transaction Categories → add your categories; then edit `src/finapp/rules.py` to add keyword → category rules for automatic matching (copy from `rules.example.py` if you haven't already)
-8. **Add Anthropic API key** — in `secrets.toml` under `[anthropic]` — enables AI chat and auto-categorization
-9. **Set up email summaries** (optional) — requires a Gmail App Password (not your regular login password):
+8.  **Categorize your expenses** - Click on the **Categorize** button at the top right of the app to run a categorization. You will have to categorize new expenses manually when you start the app. 
+9. **Add Anthropic API key** — in `secrets.toml` under `[anthropic]` — enables AI chat and auto-categorization
+10. **Set up email summaries** (optional) — requires a Gmail App Password (not your regular login password):
    1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
    2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
    3. Create a new app password — name it anything (e.g. "Finance App")
