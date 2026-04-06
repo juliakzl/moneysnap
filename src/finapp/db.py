@@ -343,14 +343,6 @@ def delete_asset(asset_id: int):
         conn.execute("DELETE FROM assets WHERE id=?", (asset_id,))
 
 
-def upsert_budget(category: str, limit: float):
-    with get_conn() as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO budgets (category, monthly_limit)
-            VALUES (?, ?)
-        """, (category, limit))
-
-
 # --- Bank connections ---
 
 
@@ -439,17 +431,6 @@ def get_main_account() -> str | None:
             "SELECT account_id FROM bank_accounts WHERE is_main = 1"
         ).fetchone()
     return row[0] if row else None
-
-
-def save_wealth_snapshot_if_missing(date_str: str, liquid: float,
-                                    investments: float, net_worth: float):
-    """Insert a snapshot only if that date doesn't already have one (preserves live snapshots)."""
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT OR IGNORE INTO wealth_snapshots (date, liquid, investments, net_worth)
-               VALUES (?, ?, ?, ?)""",
-            (date_str, liquid, investments, net_worth),
-        )
 
 
 def save_wealth_snapshots_batch(rows: list[tuple]):

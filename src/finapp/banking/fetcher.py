@@ -219,35 +219,6 @@ def get_account_balance(account_id: str) -> float | None:
         return None
 
 
-def get_account_map() -> dict[str, str]:
-    """Returns {account_id: iban} mapping, fetched from API and cached in DB."""
-    cached = get_state("account_map")
-    if cached:
-        return json.loads(cached)
-
-    account_map = {}
-    connections = get_bank_connections()
-    active = connections[connections["status"] == "active"] if not connections.empty else connections
-    for _, row in active.iterrows():
-        try:
-            for account_id in get_accounts_for_session(row["session_id"]):
-                try:
-                    resp = requests.get(f"{BASE_URL}/accounts/{account_id}", headers=_headers())
-                    resp.raise_for_status()
-                    data = resp.json()
-                    iban = (data.get("account_identifications") or [{}])[0].get("identification", "")
-                    if iban:
-                        account_map[account_id] = iban
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    if account_map:
-        set_state("account_map", json.dumps(account_map))
-    return account_map
-
-
 # --- Transaction fetching ---
 
 def _parse_transaction(tx: dict, account_id: str) -> dict:
