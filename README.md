@@ -174,6 +174,9 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 
 Trade Republic integration syncs your portfolio positions and trade history directly from your TR account.
 
+> **Powered by [pytr](https://github.com/vzqvzq/pytr)** — an unofficial Trade Republic API client.
+
+
 ### 1. Add credentials to secrets.toml
 
 ```toml
