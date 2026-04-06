@@ -164,10 +164,10 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 8.  **Categorize your expenses** - Click on the **Categorize** button at the top right of the app to run a categorization. You will have to categorize new expenses manually when you start the app. 
 9. **Add Anthropic API key** — in `secrets.toml` under `[anthropic]` — enables AI chat and auto-categorization
 10. **Set up email summaries** (optional) — requires a Gmail App Password (not your regular login password):
-   1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
-   2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-   3. Create a new app password — name it anything (e.g. "Finance App")
-   4. Copy the generated 16-character password and paste it into `secrets.toml` under `[email] app_password`
+    1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
+    2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+    3. Create a new app password — name it anything (e.g. "Finance App")
+    4. Copy the generated 16-character password and paste it into `secrets.toml` under `[email] app_password`
 
 ---
 
