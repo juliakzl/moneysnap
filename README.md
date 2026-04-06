@@ -42,8 +42,8 @@ Opens at **http://localhost:8501** — the **Get Started** tab walks you through
 Before you start, you'll need:
 
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — Python package manager
-- **Python 3.14+** (uv will handle this automatically)
-- **An Enable Banking account** — free tier works; needed to connect any PSD2-supported bank (Revolut, N26, most EU banks). Sign up at [enablebanking.com](https://enablebanking.com).
+- **Python 3.13+** (uv will handle this automatically)
+- **An Enable Banking account** — free tier works; needed to connect any PSD2-supported bank (Revolut, N26, most EU banks). Setup explained in Step 2.
 - **An Enable Banking private key** — generated when you create an application in the Enable Banking dashboard (instructions below)
 - Optionally: **Anthropic API key** (for AI chat + categorization), **Trade Republic account**, **Gmail** (for email summaries)
 

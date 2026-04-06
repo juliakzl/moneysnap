@@ -5,16 +5,16 @@ description = "Personal finance dashboard with Streamlit"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "pyjwt",
-    "cryptography",
-    "requests",
-    "streamlit",
-    "pandas",
-    "plotly",
-    "anthropic",
-    "yfinance",
+    "pyjwt==2.12.1",
+    "cryptography==46.0.5",
+    "requests==2.32.5",
+    "streamlit==1.55.0",
+    "pandas==2.3.3",
+    "plotly==6.6.0",
+    "anthropic==0.85.0",
+    "yfinance==1.2.0",
     "pytr[waf]",
-    "pre-commit>=4.5.1",
+    "pre-commit==4.5.1",
 ]
 
 [build-system]
