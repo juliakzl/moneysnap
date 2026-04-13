@@ -175,7 +175,9 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 
 Trade Republic integration syncs your portfolio positions and trade history directly from your TR account.
 
-> **Powered by [pytr](https://github.com/vzqvzq/pytr)** — an unofficial Trade Republic API client.
+> **Powered by [pytr](https://github.com/pytr-org/pytr)** — an unofficial Trade Republic API client.
+
+> **Requires Playwright (one-time setup):** after `uv sync`, run `uv run playwright install chromium`. This downloads the headless browser (~130 MB) used to bypass Trade Republic's AWS WAF protection during login.
 
 
 ### 1. Add credentials to secrets.toml
@@ -250,6 +252,9 @@ Rules are matched case-insensitively against the transaction merchant name and r
 
 **Trade Republic login fails**
 → Make sure `phone_no` includes the country code (e.g. `+49176...`). The 4-digit confirmation code is sent to your TR app or SMS.
+
+**Trade Republic login hangs or fails with a WAF/403 error**
+→ Run `uv run playwright install chromium` — the headless browser binary may be missing. Login briefly opens a background Chromium window to retrieve the AWS WAF token; if the binary isn't installed it will fail silently.
 
 **AI features not working**
 → Check that `[anthropic] api_key` is set in `secrets.toml`. The key starts with `sk-ant-`.
