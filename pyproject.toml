@@ -13,7 +13,7 @@ dependencies = [
     "plotly==6.6.0",
     "anthropic==0.85.0",
     "yfinance==1.2.0",
-    "pytr[waf]",
+    "pytr",
     "pre-commit==4.5.1",
 ]
 
@@ -25,4 +25,4 @@ build-backend = "hatchling.build"
 packages = ["src/finapp"]
 
 [tool.uv.sources]
-pytr = { git = "https://github.com/Felixoid/pytr.git", branch = "fix-aws-waf" }
+pytr = { git = "https://github.com/RealCLanger/pytr.git", branch = "improve-login" }

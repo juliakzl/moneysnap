@@ -1,17 +1,20 @@
-"""Trade Republic integration via pytr (Felixoid/pytr@fix-aws-waf branch).
+"""Trade Republic integration via pytr (RealCLanger/pytr@improve-login branch).
 
 Web login flow (keeps mobile app logged in):
   1. tr_initiate_weblogin(phone_no, pin) → (api_instance, countdown_seconds)
+     - Launches headless Chromium (Playwright) to obtain AWS WAF token automatically
   2. User enters the 4-digit code from TR app / SMS
   3. tr_complete_weblogin(api_instance, code) → saves session to ~/.pytr/
   4. tr_sync(phone_no, pin) auto-resumes from saved cookies on future calls
+
+Note: requires `playwright install chromium` after `uv sync` (one-time setup).
 """
 import asyncio
 
 
 def _make_api(phone_no: str, pin: str):
     from pytr.api import TradeRepublicApi
-    return TradeRepublicApi(phone_no=phone_no, pin=pin, save_cookies=True)
+    return TradeRepublicApi(phone_no=phone_no, pin=pin, save_cookies=True, waf_token="playwright")
 
 
 def tr_is_logged_in(phone_no: str, pin: str) -> bool:
