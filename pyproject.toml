@@ -25,4 +25,4 @@ build-backend = "hatchling.build"
 packages = ["src/finapp"]
 
 [tool.uv.sources]
-pytr = { git = "https://github.com/RealCLanger/pytr.git", branch = "improve-login" }
+pytr = { git = "https://github.com/RealCLanger/pytr.git" }
