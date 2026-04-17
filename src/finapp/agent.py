@@ -399,21 +399,10 @@ def apply_rules() -> int:
     return total
 
 
-def auto_categorize(api_key: str) -> int:
-    """
-    Categorize all uncategorized debit transactions in a single API call.
-    Groups by merchant so each merchant is only categorized once.
-    Returns the number of merchants categorized.
-    """
-    merchants = get_uncategorized_merchants()
-    if not merchants:
-        return 0
-
-    client = anthropic.Anthropic(api_key=api_key)
-
+def _categorize_batch(client, merchants: list) -> dict:
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=2048,
+        max_tokens=4096,
         messages=[{
             "role": "user",
             "content": f"""Categorize each merchant name into exactly one of these categories:
@@ -426,16 +415,32 @@ Respond with a single JSON object mapping each merchant name exactly as given to
 Output only the JSON, no explanation."""
         }]
     )
-
     text = next(b.text for b in response.content if b.type == "text")
-    # Strip markdown code fences if present
     text = text.strip()
     if text.startswith("```"):
         text = text.split("```")[1]
         if text.startswith("json"):
             text = text[4:]
-    text = text.strip()
-    mapping = json.loads(text)
+    return json.loads(text.strip())
+
+
+def auto_categorize(api_key: str) -> int:
+    """
+    Categorize all uncategorized debit transactions, batching merchants to avoid
+    truncated JSON responses when there are many unique merchants.
+    Returns the number of merchants categorized.
+    """
+    merchants = get_uncategorized_merchants()
+    if not merchants:
+        return 0
+
+    client = anthropic.Anthropic(api_key=api_key)
+    batch_size = 50
+    mapping = {}
+    for i in range(0, len(merchants), batch_size):
+        batch = merchants[i:i + batch_size]
+        mapping.update(_categorize_batch(client, batch))
+
     bulk_set_categories(mapping)
     return len(mapping)
 
