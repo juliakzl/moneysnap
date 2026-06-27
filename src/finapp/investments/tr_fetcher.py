@@ -54,10 +54,33 @@ def _to_dict(val) -> dict:
     return {}
 
 
+def _extract_positions(portfolio_raw) -> list[dict]:
+    """Flatten a compactPortfolioByType response into a flat list of positions.
+
+    TR deprecated the ``compactPortfolio``/``portfolio`` topics (they now return
+    ``BAD_SUBSCRIPTION_TYPE``). The replacement, ``compactPortfolioByType``, groups
+    positions under ``categories[].positions[]``. We still tolerate the older flat
+    ``positions``/``items`` shapes for forward/backward compatibility.
+    """
+    if isinstance(portfolio_raw, list):
+        return [p for p in portfolio_raw if isinstance(p, dict)]
+    if not isinstance(portfolio_raw, dict):
+        return []
+    categories = portfolio_raw.get("categories")
+    if isinstance(categories, list):
+        items: list[dict] = []
+        for cat in categories:
+            if isinstance(cat, dict):
+                items.extend(p for p in cat.get("positions", []) if isinstance(p, dict))
+        return items
+    # legacy flat shapes
+    return [p for p in portfolio_raw.get("positions", portfolio_raw.get("items", [])) if isinstance(p, dict)]
+
+
 async def _fetch_portfolio_and_cash(api) -> dict:
     positions = []
 
-    sub_id = await api.compact_portfolio()
+    sub_id = await api.subscribe({"type": "compactPortfolioByType"})
     _, _, portfolio_raw = await api.recv()
     await api.unsubscribe(sub_id)
 
@@ -67,18 +90,11 @@ async def _fetch_portfolio_and_cash(api) -> dict:
 
     cash = float(_to_dict(cash_raw).get("amount", 0))
 
-    # portfolio_raw may be a list of positions directly
-    if isinstance(portfolio_raw, dict):
-        items = portfolio_raw.get("positions", portfolio_raw.get("items", []))
-    elif isinstance(portfolio_raw, list):
-        items = portfolio_raw
-    else:
-        items = []
+    items = _extract_positions(portfolio_raw)
 
     for pos in items:
-        if not isinstance(pos, dict):
-            continue
-        isin = pos.get("instrumentId", "")
+        # new payload uses "isin"; legacy used "instrumentId"
+        isin = pos.get("isin") or pos.get("instrumentId", "")
         shares = float(pos.get("netSize", pos.get("size", 0)))
         if not isin:
             continue
@@ -88,7 +104,7 @@ async def _fetch_portfolio_and_cash(api) -> dict:
         _, _, details_raw = await api.recv()
         await api.unsubscribe(sub_id)
         details = _to_dict(details_raw)
-        name = details.get("shortName", isin)
+        name = details.get("shortName") or pos.get("name") or isin
         exchanges = details.get("exchangeIds", [])
 
         # Live price
