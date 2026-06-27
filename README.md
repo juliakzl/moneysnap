@@ -250,6 +250,9 @@ Rules are matched case-insensitively against the transaction merchant name and r
 **OAuth redirect doesn't work / localhost:3000 shows an error**
 → That's expected — the browser will show an error page, but the URL in the address bar contains the `code=` parameter you need. Copy the full URL from the address bar and paste it into the terminal or app.
 
+**Sync fails with `401 Unauthorized` on `/accounts/.../transactions`**
+→ Your bank consent has expired. Under PSD2/Open Banking, bank connections are valid for **90 days**, after which the bank requires you to re-authenticate. This is a legal limit, not a bug — it recurs roughly every 90 days for each connected bank. To fix: go to the **Banks** tab and reconnect the affected bank (re-run the "Get authorization link" → authorize → paste redirect URL flow, same as the first connection). This creates a fresh 90-day session. Your existing transaction history is preserved — accounts are matched by ID, so the new connection just re-points to the same accounts.
+
 **Trade Republic login fails**
 → Make sure `phone_no` includes the country code (e.g. `+49176...`). The 4-digit confirmation code is sent to your TR app or SMS.
 

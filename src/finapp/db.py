@@ -361,6 +361,15 @@ def add_bank_connection(session_id: str, bank_name: str, bank_country: str, disp
         )
 
 
+def set_bank_connection_status(session_id: str, status: str):
+    """Update a connection's status (e.g. 'active' or 'expired')."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE bank_connections SET status=? WHERE session_id=?",
+            (status, session_id),
+        )
+
+
 def delete_bank_connection(conn_id: int):
     with get_conn() as conn:
         session_id = conn.execute(

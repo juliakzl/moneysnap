@@ -9,8 +9,31 @@ from datetime import date, timedelta
 from finapp.db import (init_db, upsert_transactions, get_state, set_state,
                        get_bank_connections, add_bank_connection,
                        get_bank_accounts, upsert_bank_account,
+                       set_bank_connection_status,
                        get_transactions_for_account, get_internal_transfer_credits,
                        save_wealth_snapshots_batch)
+
+
+class ConsentExpiredError(Exception):
+    """Raised when one or more banks' PSD2 consents have expired.
+
+    Enable Banking consents are valid for 90 days; afterwards the bank returns
+    HTTP 401 on data endpoints and the session status becomes CLOSED/EXPIRED.
+    The user must reconnect the bank to grant a fresh consent.
+
+    Attributes:
+        banks: display names of the affected connections.
+        synced: number of transactions successfully synced before the error.
+    """
+
+    def __init__(self, banks, synced: int = 0):
+        self.banks = list(banks)
+        self.synced = synced
+        names = ", ".join(self.banks) if self.banks else "a bank"
+        super().__init__(
+            f"Consent expired for {names}. "
+            "Reconnect in the Banks tab to keep syncing."
+        )
 
 
 def _make_token():
@@ -200,6 +223,20 @@ def get_accounts_for_session(session_id: str) -> list[str]:
     return result
 
 
+def get_session_status(session_id: str) -> str:
+    """Return the Enable Banking session status (e.g. 'AUTHORIZED', 'CLOSED',
+    'EXPIRED'). Returns '' if it cannot be determined. A 401 here also means the
+    consent is no longer usable, so we report it as 'CLOSED'."""
+    try:
+        resp = requests.get(f"{BASE_URL}/sessions/{session_id}", headers=_headers())
+        if resp.status_code == 401:
+            return "CLOSED"
+        resp.raise_for_status()
+        return resp.json().get("status", "") or ""
+    except Exception:
+        return ""
+
+
 def get_account_balance(account_id: str) -> float | None:
     """Fetch current balance for a specific account. Returns None if unavailable."""
     try:
@@ -319,13 +356,17 @@ def fetch_and_store(date_from="2024-01-01", date_to=None):
         return 0
 
     total = 0
+    expired = []
     for _, conn_row in active.iterrows():
         try:
             account_ids = get_accounts_for_session(conn_row["session_id"])
         except Exception:
             continue
 
+        consent_dead = False
         for account_id in account_ids:
+            if consent_dead:
+                break
             continuation_key = None
             while True:
                 params = {"date_from": date_from, "date_to": date_to}
@@ -337,6 +378,12 @@ def fetch_and_store(date_from="2024-01-01", date_to=None):
                     headers=_headers(),
                     params=params,
                 )
+                if resp.status_code == 401:
+                    # PSD2 consent expired — flag the bank and stop hitting it.
+                    set_bank_connection_status(conn_row["session_id"], "expired")
+                    expired.append(conn_row["display_name"])
+                    consent_dead = True
+                    break
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -349,4 +396,6 @@ def fetch_and_store(date_from="2024-01-01", date_to=None):
                 if not continuation_key:
                     break
 
+    if expired:
+        raise ConsentExpiredError(expired, synced=total)
     return total
