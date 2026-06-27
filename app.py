@@ -15,7 +15,7 @@ from finapp.db import (init_db, get_transactions, upsert_transactions, get_state
 from finapp.investments.tr_fetcher import (tr_is_logged_in, tr_initiate_weblogin,
                                            tr_complete_weblogin, tr_sync)
 import yfinance as yf
-from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots, restore_session
+from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots, restore_session, ConsentExpiredError
 from finapp.investments.etf_catalog import ETF_CATALOG
 from finapp.notifier import send_summary_email, DEFAULT_WEEKLY_PROMPT, DEFAULT_MONTHLY_PROMPT
 from finapp.agent import run_agent, auto_categorize, apply_rules
@@ -234,8 +234,26 @@ if _btn1_col.button("🔄 Sync", use_container_width=True):
         try:
             n = fetch_and_store(date_from=str(date.today() - timedelta(days=365)))
             st.success(f"Synced {n} transactions")
+        except ConsentExpiredError as e:
+            if e.synced:
+                st.success(f"Synced {e.synced} transactions")
+            st.warning(
+                f"⚠️ Bank consent expired for **{', '.join(e.banks)}**. "
+                "Open the **Banks** tab and click **Reconnect** to grant a fresh "
+                "90-day consent (a PSD2 requirement)."
+            )
         except Exception as e:
             st.error(f"Error: {e}")
+        else:
+            # Remind about any banks already flagged expired on a prior sync
+            # (skipped above, so they don't raise here).
+            _conns = get_bank_connections()
+            _exp = _conns[_conns["status"] != "active"]["display_name"].tolist() if not _conns.empty else []
+            if _exp:
+                st.warning(
+                    f"⚠️ Consent expired for **{', '.join(_exp)}** — not synced. "
+                    "Reconnect in the **Banks** tab."
+                )
 
 if _btn2_col.button("🏷️ Categorize", use_container_width=True):
     with st.spinner("Categorizing..."):
@@ -330,6 +348,10 @@ if _minutes_since("last_sync") > 60:
         try:
             fetch_and_store(date_from=str(month_start))
             _touch("last_sync")
+        except ConsentExpiredError:
+            # Background sync: the bank is now flagged 'expired' in the DB and is
+            # surfaced in the Banks tab; stay quiet here to avoid noisy reruns.
+            pass
         except Exception:
             pass
 
@@ -1517,6 +1539,39 @@ with tab_summaries:
 with tab_banks:
     st.header("Connected Banks")
 
+    def _render_auth_completion(auth, key_suffix):
+        """Render the 'open link → paste redirect URL → complete' step for either
+        a brand-new connection or a reconnect (auth['replace_conn_id'] set)."""
+        is_reconnect = auth.get("replace_conn_id") is not None
+        verb = "Reconnect" if is_reconnect else "Authorize"
+        st.info(f"{verb} **{auth['bank']}** by opening the link below, then paste the redirect URL back here.")
+        st.markdown(f"[Open authorization link]({auth['url']})")
+        redirect_url = st.text_input("Paste the redirect URL after authorizing",
+                                     key=f"redirect_url_{key_suffix}")
+        if st.button("Complete connection", key=f"complete_conn_{key_suffix}") and redirect_url:
+            try:
+                _sid, n_accs = complete_auth(
+                    redirect_url=redirect_url,
+                    bank_name=auth["bank"],
+                    bank_country=auth["country"],
+                    display_name=auth["label"],
+                    expected_state=auth.get("state"),
+                )
+                # Reconnect: the new session re-points the same accounts (stable
+                # Enable Banking uids), so drop the old expired connection row.
+                # Its accounts were already moved to the new session by the upsert,
+                # so deleting by the old session_id leaves them — and their
+                # transaction history — intact.
+                if is_reconnect:
+                    delete_bank_connection(auth["replace_conn_id"])
+                del st.session_state.pending_auth
+                st.cache_data.clear()
+                _msg = "Reconnected!" if is_reconnect else "Connected!"
+                st.success(f"{_msg} Found {n_accs} account(s). You can rename them above.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Connection failed: {e}")
+
     connections = get_bank_connections()
     bank_accs = get_bank_accounts()
 
@@ -1525,17 +1580,48 @@ with tab_banks:
     else:
         for _, conn_row in connections.iterrows():
             accs = bank_accs[bank_accs["session_id"] == conn_row["session_id"]]
+            _expired = conn_row.get("status", "active") != "active"
             with st.container(border=True):
-                c1, c2, c3 = st.columns([6, 1, 1])
+                c1, c2, c3, c4 = st.columns([5, 1.2, 1.2, 1])
+                _status_line = (
+                    "  \n⚠️ **Consent expired** — click **Reconnect**"
+                    if _expired else ""
+                )
                 c1.markdown(f"**{conn_row['display_name']}** — {conn_row['bank_name']} ({conn_row['bank_country']})  \n"
-                            f"`{len(accs)} account(s)` · connected {conn_row['created_at'][:10]}")
-                if c2.button("Sync accounts", key=f"sync_accs_{conn_row['id']}"):
+                            f"`{len(accs)} account(s)` · connected {conn_row['created_at'][:10]}"
+                            f"{_status_line}")
+                if c2.button("Reconnect", key=f"reconnect_{conn_row['id']}"):
                     try:
-                        from finapp.banking.fetcher import get_accounts_for_session
+                        url, _state = initiate_auth(
+                            bank_name=conn_row["bank_name"],
+                            bank_country=conn_row["bank_country"],
+                        )
+                        st.session_state.pending_auth = {
+                            "url": url,
+                            "bank": conn_row["bank_name"],
+                            "country": conn_row["bank_country"],
+                            "label": conn_row["display_name"],
+                            "state": _state,
+                            "replace_conn_id": int(conn_row["id"]),
+                        }
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to start reconnection: {e}")
+                if c3.button("Sync accounts", key=f"sync_accs_{conn_row['id']}"):
+                    try:
+                        from finapp.banking.fetcher import get_accounts_for_session, get_session_status
                         import requests as _requests
                         from finapp.banking.fetcher import _headers
                         from finapp.config import BASE_URL
                         _sid = conn_row["session_id"]
+                        if get_session_status(_sid) in ("CLOSED", "EXPIRED", "REVOKED"):
+                            from finapp.db import set_bank_connection_status
+                            set_bank_connection_status(_sid, "expired")
+                            st.warning(
+                                f"⚠️ Consent for **{conn_row['display_name']}** has expired. "
+                                "Click **Reconnect** to grant a fresh 90-day consent."
+                            )
+                            st.rerun()
                         _acc_ids = get_accounts_for_session(_sid)
                         _existing_ids = set(accs["account_id"].tolist())
                         _added = 0
@@ -1570,9 +1656,14 @@ with tab_banks:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to sync accounts: {e}")
-                if c3.button("Delete", key=f"del_conn_{conn_row['id']}"):
+                if c4.button("Delete", key=f"del_conn_{conn_row['id']}"):
                     delete_bank_connection(int(conn_row["id"]))
                     st.rerun()
+
+                # Inline reconnect flow, shown right under the connection it replaces
+                if st.session_state.get("pending_auth", {}).get("replace_conn_id") == int(conn_row["id"]):
+                    _render_auth_completion(st.session_state.pending_auth,
+                                            key_suffix=f"re_{conn_row['id']}")
 
                 if not accs.empty:
                     _main_acc = get_main_account()
@@ -1779,25 +1870,9 @@ with tab_banks:
         except Exception as e:
             st.error(f"Failed to start authorization: {e}")
 
-    if "pending_auth" in st.session_state:
-        auth = st.session_state.pending_auth
-        st.info(f"Authorize **{auth['bank']}** by opening the link below, then paste the redirect URL back here.")
-        st.markdown(f"[Open authorization link]({auth['url']})")
-        redirect_url = st.text_input("Paste the redirect URL after authorizing")
-        if st.button("Complete connection") and redirect_url:
-            try:
-                session_id, n_accs = complete_auth(
-                    redirect_url=redirect_url,
-                    bank_name=auth["bank"],
-                    bank_country=auth["country"],
-                    display_name=auth["label"],
-                    expected_state=auth.get("state"),
-                )
-                del st.session_state.pending_auth
-                st.success(f"Connected! Found {n_accs} account(s). You can rename them above.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Connection failed: {e}")
+    # New-connection auth completion (reconnects render inline under their row above)
+    if "pending_auth" in st.session_state and not st.session_state.pending_auth.get("replace_conn_id"):
+        _render_auth_completion(st.session_state.pending_auth, key_suffix="new")
 
     st.divider()
     st.subheader("Historical data sync")
