@@ -7,7 +7,8 @@ from finapp.db import (init_db, get_transactions, upsert_transactions, get_state
                        delete_savings_account, get_assets, upsert_asset, delete_asset,
                        save_wealth_snapshot, get_wealth_snapshots, get_account_display_names,
                        get_bank_connections, get_bank_accounts, add_bank_connection,
-                       delete_bank_connection, upsert_bank_account, update_bank_account_name, update_bank_account_joint,
+                       delete_bank_connection, get_connection_session_id, reconcile_reconnected_accounts,
+                       upsert_bank_account, update_bank_account_name, update_bank_account_joint,
                        set_main_account, get_main_account, update_transaction_category,
                        upsert_tr_transactions, get_tr_transactions, sync_tr_portfolio,
                        save_tr_prices, get_tr_prices,
@@ -257,13 +258,33 @@ if _btn1_col.button("🔄 Sync", use_container_width=True):
 
 if _btn2_col.button("🏷️ Categorize", use_container_width=True):
     with st.spinner("Categorizing..."):
+        # Run rules and AI independently so a failure in one still applies the
+        # other, and always refresh so successful changes show up.
+        n_rules = n_ai = None
+        rules_err = ai_err = None
         try:
             n_rules = apply_rules()
-            n_ai = auto_categorize(api_key=get_api_key())
-            st.success(f"Rules: {n_rules} — AI: {n_ai} merchants")
-            st.rerun()
         except Exception as e:
-            st.error(f"Categorization error: {e}")
+            rules_err = e
+        try:
+            _key = get_api_key()
+            if _key:
+                n_ai = auto_categorize(api_key=_key)
+        except Exception as e:
+            ai_err = e
+
+        _parts = []
+        if n_rules is not None:
+            _parts.append(f"Rules: {n_rules}")
+        if n_ai is not None:
+            _parts.append(f"AI: {n_ai} merchants")
+        if _parts:
+            st.success(" — ".join(_parts))
+        if rules_err:
+            st.error(f"Rules step failed: {rules_err}")
+        if ai_err:
+            st.warning(f"AI step failed (rules still applied): {ai_err}")
+    st.rerun()
 
 init_db()
 
@@ -1557,17 +1578,24 @@ with tab_banks:
                     display_name=auth["label"],
                     expected_state=auth.get("state"),
                 )
-                # Reconnect: the new session re-points the same accounts (stable
-                # Enable Banking uids), so drop the old expired connection row.
-                # Its accounts were already moved to the new session by the upsert,
-                # so deleting by the old session_id leaves them — and their
-                # transaction history — intact.
+                # Reconnect: some banks (e.g. Revolut) issue brand-new account
+                # uids on every reconnect. Match the new accounts to the old ones
+                # by IBAN and carry over transaction history, custom names, and
+                # the main-account flag, then drop the old expired connection.
+                _reconciled = 0
                 if is_reconnect:
+                    _old_session = get_connection_session_id(auth["replace_conn_id"])
+                    if _old_session:
+                        _reconciled = reconcile_reconnected_accounts(_old_session, _sid)
                     delete_bank_connection(auth["replace_conn_id"])
                 del st.session_state.pending_auth
                 st.cache_data.clear()
                 _msg = "Reconnected!" if is_reconnect else "Connected!"
-                st.success(f"{_msg} Found {n_accs} account(s). You can rename them above.")
+                _extra = (
+                    f" Re-linked {_reconciled} existing account(s) — your history is preserved."
+                    if _reconciled else ""
+                )
+                st.success(f"{_msg} Found {n_accs} account(s).{_extra} You can rename them above.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Connection failed: {e}")
