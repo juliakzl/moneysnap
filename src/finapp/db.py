@@ -370,6 +370,55 @@ def set_bank_connection_status(session_id: str, status: str):
         )
 
 
+def get_connection_session_id(conn_id: int) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT session_id FROM bank_connections WHERE id=?", (conn_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def reconcile_reconnected_accounts(old_session_id: str, new_session_id: str) -> int:
+    """Carry an account's identity across a reconnect.
+
+    Some banks (e.g. Revolut) issue brand-new account uids on every reconnect.
+    Without reconciliation the new session's accounts get fresh ids and the old
+    transactions are orphaned from their names / main-flag / the account filter.
+
+    We match old accounts to new ones by IBAN, then for each match:
+      * reassign the old transactions to the new account_id (history continuity),
+      * carry over the user's custom display name and the is_main flag.
+
+    Returns the number of accounts reconciled.
+    """
+    with get_conn() as conn:
+        old = conn.execute(
+            "SELECT account_id, iban, display_name, is_main FROM bank_accounts WHERE session_id=?",
+            (old_session_id,),
+        ).fetchall()
+        new = conn.execute(
+            "SELECT account_id, iban FROM bank_accounts WHERE session_id=?",
+            (new_session_id,),
+        ).fetchall()
+        new_by_iban = {iban: aid for aid, iban in new if iban}
+
+        reconciled = 0
+        for old_id, iban, display_name, is_main in old:
+            new_id = new_by_iban.get(iban) if iban else None
+            if not new_id or new_id == old_id:
+                continue
+            conn.execute(
+                "UPDATE transactions SET account_id=? WHERE account_id=?",
+                (new_id, old_id),
+            )
+            conn.execute(
+                "UPDATE bank_accounts SET display_name=?, is_main=? WHERE account_id=?",
+                (display_name, is_main, new_id),
+            )
+            reconciled += 1
+        return reconciled
+
+
 def delete_bank_connection(conn_id: int):
     with get_conn() as conn:
         session_id = conn.execute(

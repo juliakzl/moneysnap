@@ -1,8 +1,11 @@
 # Private keys — never commit these
 *.pem
 
-# Database with real financial data
+# Database with real financial data (incl. WAL/SHM and timestamped backups)
 *.db
+finance.db*
+*.db.bak-*
+*.bak
 *.sqlite
 *.sqlite3
 
@@ -33,3 +36,4 @@ build/
 
 # Logs
 logs/
+src/finapp/rules.py
