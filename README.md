@@ -177,9 +177,6 @@ Trade Republic integration syncs your portfolio positions and trade history dire
 
 > **Powered by [pytr](https://github.com/pytr-org/pytr)** — an unofficial Trade Republic API client.
 
-> **Requires Playwright (one-time setup):** after `uv sync`, run `uv run playwright install chromium`. This downloads the headless browser (~130 MB) used to bypass Trade Republic's AWS WAF protection during login.
-
-
 ### 1. Add credentials to secrets.toml
 
 ```toml
@@ -194,13 +191,13 @@ Restart the app after saving.
 
 Go to the **Banks** tab → scroll down to the **Trade Republic** section:
 
-1. Click **Send login code to TR app / SMS** — Trade Republic sends a 4-digit confirmation code to your TR app or via SMS
-2. Enter the code and click **Confirm code**
-3. Once connected, click **Sync portfolio** to import your positions and trade history
+1. Click **Request login in TR app** — Trade Republic sends a push notification to your phone
+2. Confirm the login in the Trade Republic mobile app (authenticator accounts are asked for a TOTP code instead)
+3. Once connected, click **Sync Trade Republic data** to import your positions and trade history
 
 The session is saved as a cookie (`~/.pytr/`) so you won't need to log in again unless the session expires. If it does, a "Re-login" button appears in the same section.
 
-> **Note:** Trade Republic uses 2FA by design — your PIN alone is not enough. The 4-digit code step is always required on first login.
+> **Note:** Trade Republic uses 2FA by design — your PIN alone is not enough. You must confirm the login in the mobile app.
 
 ---
 
@@ -256,10 +253,10 @@ Rules are matched case-insensitively against the transaction merchant name and r
 > **History preservation & the IBAN caveat:** some banks (e.g. Revolut) issue **brand-new account IDs** on every reconnect. To keep your history continuous, the app matches the reconnected accounts to your existing ones **by IBAN** and carries over their transactions, custom display names, and main-account flag. This works whenever the bank reports an IBAN (or BBAN) for the account. If a bank exposes an account with *no* IBAN at all, it can't be matched automatically — that account will appear as new after reconnect, and its older transactions will stay under the previous ID (still in the database, but detached from the new account's name/filter).
 
 **Trade Republic login fails**
-→ Make sure `phone_no` includes the country code (e.g. `+49176...`). The 4-digit confirmation code is sent to your TR app or SMS.
+→ Make sure `phone_no` includes the country code (e.g. `+49176...`). Confirm the login push in the Trade Republic mobile app while the spinner is showing. Authenticator-protected accounts need a TOTP code instead of a push.
 
-**Trade Republic login hangs or fails with a WAF/403 error**
-→ Run `uv run playwright install chromium` — the headless browser binary may be missing. Login briefly opens a background Chromium window to retrieve the AWS WAF token; if the binary isn't installed it will fail silently.
+**Trade Republic login times out**
+→ The app waits about two minutes for you to confirm in the TR app. Retry **Request login in TR app** and approve the new push promptly.
 
 **AI features not working**
 → Check that `[anthropic] api_key` is set in `secrets.toml`. The key starts with `sk-ant-`.

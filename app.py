@@ -14,6 +14,7 @@ from finapp.db import (init_db, get_transactions, upsert_transactions, get_state
                        save_tr_prices, get_tr_prices,
                        get_categories, add_category, delete_category, rename_category)
 from finapp.investments.tr_fetcher import (tr_is_logged_in, tr_initiate_weblogin,
+                                           tr_weblogin_needs_authenticator,
                                            tr_complete_weblogin, tr_sync)
 import yfinance as yf
 from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots, restore_session, ConsentExpiredError
@@ -1756,21 +1757,33 @@ with tab_banks:
         _login_step = st.session_state.get("tr_login_step", "idle" if _tr_session_valid else "send_code")
 
         if _login_step == "send_code":
-            if st.button("Send login code to TR app / SMS", key="tr_send_code"):
-                with st.spinner("Sending login request…"):
-                    try:
+            st.caption("Trade Republic will send a push notification to your phone. Confirm it in the app.")
+            if st.button("Request login in TR app", key="tr_send_code"):
+                try:
+                    with st.spinner("Check your Trade Republic app and confirm the login…"):
                         _tr_api, _countdown = tr_initiate_weblogin(_tr_phone, _tr_pin)
                         st.session_state["tr_pending_api"]       = _tr_api
                         st.session_state["tr_pending_countdown"] = _countdown
-                        st.session_state["tr_login_step"]        = "enter_code"
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to send code: {e}")
+                        if tr_weblogin_needs_authenticator(_tr_api):
+                            st.session_state["tr_login_step"] = "enter_totp"
+                            st.rerun()
+                        tr_complete_weblogin(_tr_api)
+                    st.session_state.pop("tr_pending_api", None)
+                    st.session_state["tr_session_valid"] = True
+                    st.session_state["tr_login_step"]    = "idle"
+                    st.success("Logged in to Trade Republic!")
+                    st.rerun()
+                except TimeoutError:
+                    st.session_state.pop("tr_pending_api", None)
+                    st.error("The login was not confirmed in time. Open the TR app when you retry.")
+                except Exception as e:
+                    st.session_state.pop("tr_pending_api", None)
+                    st.error(f"Failed to start login: {e}")
 
-        elif _login_step == "enter_code":
-            _countdown = st.session_state.get("tr_pending_countdown", 300)
-            st.info(f"Enter the 4-digit code from the Trade Republic app or SMS (valid for {_countdown}s).")
-            _code = st.text_input("4-digit code", max_chars=4, key="tr_login_code")
+        elif _login_step == "enter_totp":
+            _countdown = st.session_state.get("tr_pending_countdown", 120)
+            st.info(f"Enter the code from your authenticator app (valid for {_countdown}s).")
+            _code = st.text_input("Authenticator code", max_chars=8, key="tr_login_code")
             if st.button("Confirm code", key="tr_confirm_code") and _code:
                 with st.spinner("Completing login…"):
                     try:
@@ -1782,6 +1795,11 @@ with tab_banks:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Login failed: {e}")
+
+        elif _login_step == "enter_code":
+            # leftover from the old v1 4-digit flow — restart as v2
+            st.session_state["tr_login_step"] = "send_code"
+            st.rerun()
 
         # -- Sync --
         if _tr_session_valid:
