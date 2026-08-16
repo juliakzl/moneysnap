@@ -1,20 +1,35 @@
-"""Trade Republic integration via pytr (RealCLanger/pytr@improve-login branch).
+"""Trade Republic integration via pytr.
 
-Web login flow (keeps mobile app logged in):
+Web login uses the v2 flow (pytr 0.4.10+ / --v2):
   1. tr_initiate_weblogin(phone_no, pin) → (api_instance, countdown_seconds)
-     - Launches headless Chromium (Playwright) to obtain AWS WAF token automatically
-  2. User enters the 4-digit code from TR app / SMS
-  3. tr_complete_weblogin(api_instance, code) → saves session to ~/.pytr/
+     - POSTs /api/v2/auth/web/login; TR sends a push to the mobile app
+  2. User confirms the login in the TR app (or enters an authenticator code)
+  3. tr_complete_weblogin(api_instance) polls until confirmed, then saves ~/.pytr/
   4. tr_sync(phone_no, pin) auto-resumes from saved cookies on future calls
-
-Note: requires `playwright install chromium` after `uv sync` (one-time setup).
 """
 import asyncio
 
 
+def _trade_republic_api_cls():
+    """Return TradeRepublicApi, reloading pytr if this process still has 0.4.9."""
+    import inspect
+    from importlib import reload
+    import pytr.api as api_mod
+
+    if "use_v2_login" not in inspect.signature(api_mod.TradeRepublicApi.__init__).parameters:
+        api_mod = reload(api_mod)
+    cls = api_mod.TradeRepublicApi
+    if "use_v2_login" not in inspect.signature(cls.__init__).parameters:
+        raise RuntimeError(
+            "pytr 0.4.10 is required for TR login. Stop the app and restart with "
+            "`uv run streamlit run app.py`."
+        )
+    return cls
+
+
 def _make_api(phone_no: str, pin: str):
-    from pytr.api import TradeRepublicApi
-    return TradeRepublicApi(phone_no=phone_no, pin=pin, save_cookies=True, waf_token="playwright")
+    TradeRepublicApi = _trade_republic_api_cls()
+    return TradeRepublicApi(phone_no=phone_no, pin=pin, save_cookies=True, use_v2_login=True)
 
 
 def tr_is_logged_in(phone_no: str, pin: str) -> bool:
@@ -26,18 +41,23 @@ def tr_is_logged_in(phone_no: str, pin: str) -> bool:
 
 def tr_initiate_weblogin(phone_no: str, pin: str) -> tuple:
     """
-    Start the web login flow.
+    Start the v2 web login flow (push approval in the TR app).
     Returns (api_instance, countdown_seconds).
-    Keep api_instance alive (e.g. in st.session_state) and pass it to
-    tr_complete_weblogin once the user has the 4-digit code.
+    Keep api_instance alive and pass it to tr_complete_weblogin after the
+    user confirms in the app, or with an authenticator code if required.
     """
     api = _make_api(phone_no, pin)
     countdown = api.initiate_weblogin()
     return api, countdown
 
 
-def tr_complete_weblogin(api, code: str) -> None:
-    """Complete web login with the 4-digit code. Saves session cookies to disk."""
+def tr_weblogin_needs_authenticator(api) -> bool:
+    """True when this login must be finished with an authenticator-app code."""
+    return bool(getattr(api, "weblogin_needs_authenticator", False))
+
+
+def tr_complete_weblogin(api, code: str | None = None) -> None:
+    """Finish v2 login: poll for app confirmation, or submit a TOTP code."""
     api.complete_weblogin(code)
 
 
@@ -55,12 +75,10 @@ def _to_dict(val) -> dict:
 
 
 def _extract_positions(portfolio_raw) -> list[dict]:
-    """Flatten a compactPortfolioByType response into a flat list of positions.
+    """Flatten compactPortfolioByType payload (pytr #361 / PR #362).
 
-    TR deprecated the ``compactPortfolio``/``portfolio`` topics (they now return
-    ``BAD_SUBSCRIPTION_TYPE``). The replacement, ``compactPortfolioByType``, groups
-    positions under ``categories[].positions[]``. We still tolerate the older flat
-    ``positions``/``items`` shapes for forward/backward compatibility.
+    Positions are grouped under categories[].positions[]; the new API uses
+    ``isin`` where the old compactPortfolio topic used ``instrumentId``.
     """
     if isinstance(portfolio_raw, list):
         return [p for p in portfolio_raw if isinstance(p, dict)]
@@ -70,17 +88,27 @@ def _extract_positions(portfolio_raw) -> list[dict]:
     if isinstance(categories, list):
         items: list[dict] = []
         for cat in categories:
-            if isinstance(cat, dict):
-                items.extend(p for p in cat.get("positions", []) if isinstance(p, dict))
+            if not isinstance(cat, dict):
+                continue
+            for pos in cat.get("positions", []):
+                if not isinstance(pos, dict):
+                    continue
+                if "isin" in pos and "instrumentId" not in pos:
+                    pos["instrumentId"] = pos["isin"]
+                items.append(pos)
         return items
-    # legacy flat shapes
-    return [p for p in portfolio_raw.get("positions", portfolio_raw.get("items", [])) if isinstance(p, dict)]
+    return [
+        p
+        for p in portfolio_raw.get("positions", portfolio_raw.get("items", []))
+        if isinstance(p, dict)
+    ]
 
 
 async def _fetch_portfolio_and_cash(api) -> dict:
     positions = []
 
-    sub_id = await api.subscribe({"type": "compactPortfolioByType"})
+    # pytr 0.4.10+ subscribes to compactPortfolioByType with secAccNo (#361)
+    sub_id = await api.compact_portfolio()
     _, _, portfolio_raw = await api.recv()
     await api.unsubscribe(sub_id)
 
@@ -89,7 +117,6 @@ async def _fetch_portfolio_and_cash(api) -> dict:
     await api.unsubscribe(sub_id)
 
     cash = float(_to_dict(cash_raw).get("amount", 0))
-
     items = _extract_positions(portfolio_raw)
 
     for pos in items:
