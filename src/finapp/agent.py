@@ -7,6 +7,7 @@ import streamlit as st
 from finapp.config import DB_PATH
 from finapp.db import get_uncategorized_merchants, bulk_set_categories, get_state, get_goals, get_savings_accounts, get_main_account, get_bank_accounts
 from finapp.banking.fetcher import get_account_balance
+from finapp.memory import load_memory, save_memory, scan_recent_activity
 try:
     from finapp.rules import RULES
 except ImportError:
@@ -316,13 +317,50 @@ TOOLS = [
             },
             "required": ["category"]
         }
+    },
+    {
+        "name": "scan_recent_activity",
+        "description": "Scan transactions since the last memory review and compare this month to a 3-month baseline. Returns category spikes, large new debits, unusual credits, new merchants, and recurring payments that appeared extra times. Call this at the start of a review, or when spending looks off and memory does not explain it.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "since": {
+                    "type": "string",
+                    "description": "Optional YYYY-MM-DD. Defaults to Last reviewed in the memory file, or the start of this month."
+                }
+            }
+        }
+    },
+    {
+        "name": "update_memory",
+        "description": "Rewrite the durable memory file. Always pass the COMPLETE updated markdown, not a fragment. Keep it short. Use this whenever you learn something that should change how future months are read.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Full markdown contents of the memory file."
+                }
+            },
+            "required": ["content"]
+        }
     }
 ]
+
+REVIEW_PROMPT = (
+    "Review my finances since your last memory update. "
+    "Call scan_recent_activity, compare the findings to your memory file, "
+    "and ask me about anything that stands out and is not already explained. "
+    "Ask at most 3 questions. After I answer, update the memory file. "
+    "If memory already covers everything that stands out, say so briefly "
+    "and update Last reviewed to today."
+)
 
 def _build_system_prompt() -> str:
     user_name = st.secrets.get("app", {}).get("user_name", "the user")
     savings_goal = st.secrets.get("app", {}).get("savings_goal", "")
     savings_goal_line = f"- The user's savings goal: {savings_goal}. Always factor this into allocation advice" if savings_goal else ""
+    memory = load_memory()
     return f"""You are a personal finance assistant for {user_name}. You have full access to their real financial data.
 
 Account structure:
@@ -336,22 +374,40 @@ Your capabilities:
 - Analyse spending patterns and trends
 - Check budget status
 - Categorize transactions
+- Scan recent activity for things that stand out
+- Maintain a durable memory file across conversations
 - Provide wealth allocation analysis and financial advice using get_wealth_snapshot
 
 Guidelines:
 - Always use € for amounts
 - Be concise and specific — give numbers, not vague advice
 - For wealth/investment questions: always call get_wealth_snapshot first
-- For spending questions: use get_spending_summary first for an overview
+- For spending questions: use get_spending_summary first for an overview, then read memory before interpreting the numbers
 - When giving investment advice: consider emergency fund needs (3-6 months expenses), liquidity, and risk profile
 {savings_goal_line}
 - The Flexible Cash Fund is liquid but low-yield — flag if the balance is excessive vs monthly expenses
 - Brokerage is for long-term wealth building — ETFs preferred over individual stocks for diversification
 - When categorizing, use: Groceries, Dining, Transport, Shopping, Vinted, Subscriptions, Health, Entertainment, Travel, Rent, Investments, Joint Account, Other
 - Never expose raw account UUIDs in responses
-- Today's date is {datetime.now().strftime("%Y-%m-%d")}"""
+- Today's date is {datetime.now().strftime("%Y-%m-%d")}
 
-SYSTEM_PROMPT = _build_system_prompt()
+## Durable memory
+You keep a markdown memory file across conversations. It is your long-term picture of this person's financial life — overlapping costs, one-off trips, who people are, and what a normal month looks like. Categories describe *what* the money is; memory describes *why*.
+
+Current memory:
+---
+{memory}
+---
+
+Memory rules:
+- Read memory before interpreting spending. If a month looks high, check whether memory already explains it.
+- When you learn something that would change how you read future months, call update_memory immediately. Do not wait to be asked.
+- Always pass the complete file to update_memory. Keep it short (aim under 80 lines). Facts and names, not transaction dumps.
+- Keep these sections: Current situation, Recurring / baseline, People & merchants, How to read unusual months.
+- Always keep a `Last reviewed: YYYY-MM-DD` line. After a review, set it to today.
+- Move stale "current situation" items out once they no longer apply.
+- If something stands out and memory does not explain it, ASK. Do not invent a story.
+- Ask at most 2–3 questions at a time, then write the answers back into memory."""
 
 
 def apply_rules() -> int:
@@ -447,13 +503,14 @@ def auto_categorize(api_key: str) -> int:
 
 def run_agent(messages: list, api_key: str) -> tuple[str, list]:
     client = anthropic.Anthropic(api_key=api_key)
+    system = _build_system_prompt()
 
     while True:
         response = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=4096,
             thinking={"type": "adaptive"},
-            system=SYSTEM_PROMPT,
+            system=system,
             tools=TOOLS,
             messages=messages,
         )
@@ -479,6 +536,12 @@ def run_agent(messages: list, api_key: str) -> tuple[str, list]:
                     result = get_wealth_snapshot()
                 elif block.name == "set_category":
                     result = set_category(**block.input)
+                elif block.name == "scan_recent_activity":
+                    result = scan_recent_activity(**block.input)
+                elif block.name == "update_memory":
+                    result = save_memory(block.input.get("content", ""))
+                    if result.get("ok"):
+                        system = _build_system_prompt()
                 else:
                     result = {"error": f"Unknown tool: {block.name}"}
 

@@ -20,7 +20,9 @@ import yfinance as yf
 from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots, restore_session, ConsentExpiredError
 from finapp.investments.etf_catalog import ETF_CATALOG
 from finapp.notifier import send_summary_email, DEFAULT_WEEKLY_PROMPT, DEFAULT_MONTHLY_PROMPT
-from finapp.agent import run_agent, auto_categorize, apply_rules
+from finapp.agent import run_agent, auto_categorize, apply_rules, REVIEW_PROMPT
+from finapp.memory import load_memory, save_memory, get_last_reviewed, open_memory_in_editor
+from finapp.config import MEMORY_PATH
 try:
     from finapp.rules import RULES as _CATEGORIZATION_RULES
 except ImportError:
@@ -1463,28 +1465,93 @@ with tab_dashboard:
 # --- Chat tab ---
 with tab_chat:
     st.header("Ask about your finances")
-    st.caption("Ask anything — spending summaries, top merchants, budget status, or categorize transactions.")
+    st.caption("Type in the chat box at the bottom. After a review, answer the questions there in your own words — the agent will write them into memory.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []      # display messages
         st.session_state.agent_messages = []    # full API message history
 
-    # Render chat history
+    _memory_last = get_last_reviewed()
+    if _memory_last:
+        st.caption(f"Memory last reviewed {_memory_last}.")
+    else:
+        st.caption("Memory is empty — run a review to start building context.")
+
+    _review_col, _clear_col = st.columns([1, 1])
+    if _review_col.button("Review recent activity", disabled=not get_api_key()):
+        st.session_state.pending_agent_prompt = REVIEW_PROMPT
+    if _clear_col.button("Clear chat", disabled=not st.session_state.chat_history):
+        st.session_state.chat_history = []
+        st.session_state.agent_messages = []
+        st.rerun()
+
+    with st.expander("Agent memory"):
+        st.caption(f"`{MEMORY_PATH}` is gitignored. The agent updates it after a review. Edit here or open the file in your editor.")
+        if "editing_memory" not in st.session_state:
+            st.session_state.editing_memory = False
+
+        if st.session_state.editing_memory:
+            _mem_draft = st.text_area(
+                "Memory file",
+                height=320,
+                key="agent_memory_editor",
+                label_visibility="collapsed",
+            )
+            _save_col, _cancel_col, _open_col = st.columns([1, 1, 2])
+            if _save_col.button("Save memory"):
+                _saved = save_memory(_mem_draft)
+                if _saved.get("ok"):
+                    st.session_state.editing_memory = False
+                    st.toast("Memory saved", icon="✅")
+                    st.rerun()
+                else:
+                    st.error(_saved.get("error", "Could not save memory."))
+            if _cancel_col.button("Cancel"):
+                st.session_state.editing_memory = False
+                st.rerun()
+            if _open_col.button("Open in editor"):
+                _opened = open_memory_in_editor()
+                if _opened.get("ok"):
+                    st.toast(f"Opened {_opened['path']}", icon="📝")
+                else:
+                    st.error(_opened.get("error", "Could not open the memory file."))
+        else:
+            _edit_col, _open_col = st.columns([1, 3])
+            if _edit_col.button("Edit"):
+                st.session_state.agent_memory_editor = load_memory()
+                st.session_state.editing_memory = True
+                st.rerun()
+            if _open_col.button("Open in editor"):
+                _opened = open_memory_in_editor()
+                if _opened.get("ok"):
+                    st.toast(f"Opened {_opened['path']}", icon="📝")
+                else:
+                    st.error(_opened.get("error", "Could not open the memory file."))
+            with st.container(border=True):
+                st.markdown(load_memory())
+
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input
-    if prompt := st.chat_input("e.g. How much did I spend last month?"):
-        # Show user message
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
+    _waiting_on_user = bool(st.session_state.chat_history) and st.session_state.chat_history[-1]["role"] == "assistant"
+    _chat_placeholder = (
+        "Answer here — e.g. Timon is the holiday rental, paying for my parents…"
+        if _waiting_on_user
+        else "e.g. How much did I spend last month?"
+    )
+    chat_prompt = st.chat_input(_chat_placeholder)
+    prompt = st.session_state.pop("pending_agent_prompt", None) or chat_prompt
+    if prompt:
+        display_prompt = "Review my recent activity." if prompt == REVIEW_PROMPT else prompt
+        st.session_state.chat_history.append({"role": "user", "content": display_prompt})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(display_prompt)
 
-        # Run agent
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
+                    _mem_before = load_memory()
                     st.session_state.agent_messages.append(
                         {"role": "user", "content": prompt}
                     )
@@ -1495,14 +1562,10 @@ with tab_chat:
                     st.session_state.agent_messages = updated_messages
                     st.markdown(reply)
                     st.session_state.chat_history.append({"role": "assistant", "content": reply})
+                    if load_memory() != _mem_before and not st.session_state.get("editing_memory"):
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Agent error: {e}")
-
-    if st.session_state.chat_history:
-        if st.button("Clear chat"):
-            st.session_state.chat_history = []
-            st.session_state.agent_messages = []
-            st.rerun()
 
 # --- Summaries tab ---
 with tab_summaries:
