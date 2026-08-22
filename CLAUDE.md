@@ -19,6 +19,7 @@ A personal finance dashboard built with Python/Streamlit. Connects to real bank 
   - `db.py` — all SQLite read/write logic (~600 lines)
   - `rules.py` — keyword-based transaction categorization rules (edit to customize)
   - `agent.py` — Claude AI agent with tool-use for finance queries
+  - `memory.py` — durable agent memory (`agent_memory.md`, gitignored, seeded from `agent_memory.example.md`) plus recent-activity scan
   - `notifier.py` — email summaries via Gmail SMTP
   - `banking/`
     - `fetcher.py` — Enable Banking API wrapper (bank discovery, OAuth, transaction fetch)
@@ -176,7 +177,7 @@ If a user opens this repo for the first time, guide them through these steps in 
 The app has a **Get Started** tab that shows onboarding progress and surfaces these steps inline — direct new users there first.
 
 ## What NOT to suggest
-- Do not suggest committing `finance.db`, `secrets.toml`, or any `.pem` files
+- Do not suggest committing `finance.db`, `secrets.toml`, `agent_memory.md`, or any `.pem` files
 - Do not hardcode secrets or account IDs in source files — always use `st.secrets`
 - Do not add per-user auth/login — this is a single-user local app by design
 - Do not change `INSERT OR REPLACE` patterns in db.py — idempotency is intentional

@@ -4,10 +4,10 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-import anthropic
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+from finapp.llm import complete, resolve_chat_model
 
 from finapp.db import (get_transactions, get_budgets, get_state, set_state, get_goals, save_summary,
                        get_savings_accounts, get_main_account, get_bank_accounts, get_assets, get_tr_prices)
@@ -311,21 +311,20 @@ def _collect_financial_context() -> dict:
     }
 
 
-def generate_summary(api_key: str, prompt_template: str) -> str:
-    """Generate a summary email using Claude with the given prompt template.
+def generate_summary(api_key: str, prompt_template: str, model: str | None = None) -> str:
+    """Generate a summary email with the given prompt template.
     Use {context} in the template as a placeholder for the financial data JSON."""
     ctx = _collect_financial_context()
     user_name = st.secrets.get("app", {}).get("user_name", "the user")
     prompt = prompt_template.replace("{context}", json.dumps(ctx, indent=2)).replace("{user_name}", user_name)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model="claude-opus-4-6",
+    chosen = resolve_chat_model(model or get_state("llm_model"))
+    response = complete(
+        api_key,
+        chosen,
+        [{"role": "user", "content": prompt}],
         max_tokens=8000,
-        thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": prompt}]
     )
-    return next(b.text for b in response.content if b.type == "text")
+    return response.choices[0].message.content or ""
 
 
 def send_summary_email(to_address: str, gmail_user: str, gmail_app_password: str,

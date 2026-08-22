@@ -12,15 +12,25 @@ from finapp.db import (init_db, get_transactions, upsert_transactions, get_state
                        set_main_account, get_main_account, update_transaction_category,
                        upsert_tr_transactions, get_tr_transactions, sync_tr_portfolio,
                        save_tr_prices, get_tr_prices,
-                       get_categories, add_category, delete_category, rename_category)
-from finapp.investments.tr_fetcher import (tr_is_logged_in, tr_initiate_weblogin,
+                       get_categories, add_category, delete_category, rename_category,
+                       set_bank_connection_status)
+from finapp.investments.tr_fetcher import (tr_initiate_weblogin,
                                            tr_weblogin_needs_authenticator,
-                                           tr_complete_weblogin, tr_sync)
+                                           tr_complete_weblogin, tr_sync,
+                                           tr_session_is_alive)
 import yfinance as yf
-from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots, restore_session, ConsentExpiredError
+from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_banks, initiate_auth, complete_auth, backfill_wealth_snapshots, restore_session, ConsentExpiredError, get_session_status
 from finapp.investments.etf_catalog import ETF_CATALOG
 from finapp.notifier import send_summary_email, DEFAULT_WEEKLY_PROMPT, DEFAULT_MONTHLY_PROMPT
-from finapp.agent import run_agent, auto_categorize, apply_rules
+from finapp.agent import run_agent, auto_categorize, apply_rules, REVIEW_PROMPT
+from finapp.llm import (
+    CHAT_MODEL_IDS,
+    model_hint,
+    model_label,
+    resolve_chat_model,
+)
+from finapp.memory import load_memory, save_memory, get_last_reviewed, open_memory_in_editor
+from finapp.config import MEMORY_PATH
 try:
     from finapp.rules import RULES as _CATEGORIZATION_RULES
 except ImportError:
@@ -35,15 +45,166 @@ def _chart_header(title: str, info: str, key: str):
     c2.checkbox("ℹ", key=key, help=info, value=False)
 
 def get_api_key() -> str:
-    """Return the Anthropic API key — session state takes precedence over secrets.toml."""
-    if "_anthropic_api_key" not in st.session_state:
-        # One-time migration: move key from DB to session state and clear from DB
-        db_key = get_state("anthropic_api_key")
+    """Return the OpenRouter API key — session state takes precedence over secrets.toml."""
+    if "_openrouter_api_key" not in st.session_state:
+        db_key = get_state("openrouter_api_key")
         if db_key and len(db_key) > 20:
-            st.session_state["_anthropic_api_key"] = db_key
-            set_state("anthropic_api_key", "")
-    key = st.session_state.get("_anthropic_api_key") or st.secrets.get("anthropic", {}).get("api_key", "") or ""
+            st.session_state["_openrouter_api_key"] = db_key
+            set_state("openrouter_api_key", "")
+    key = (
+        st.session_state.get("_openrouter_api_key")
+        or st.secrets.get("openrouter", {}).get("api_key", "")
+        or ""
+    )
     return key if len(key) > 20 else ""
+
+
+def get_chat_model() -> str:
+    if "llm_model" not in st.session_state:
+        st.session_state.llm_model = resolve_chat_model(get_state("llm_model"))
+    return resolve_chat_model(st.session_state.llm_model)
+
+
+_DEAD_SESSION_STATUSES = {"CLOSED", "EXPIRED", "REVOKED"}
+
+
+def _minutes_since(state_key: str) -> float:
+    last = get_state(state_key)
+    if not last:
+        return float("inf")
+    delta = datetime.now(timezone.utc) - datetime.fromisoformat(last)
+    return delta.total_seconds() / 60
+
+
+def _touch(state_key: str):
+    set_state(state_key, datetime.now(timezone.utc).isoformat())
+
+
+def _tr_credentials() -> tuple[str, str]:
+    section = st.secrets.get("trade_republic", {})
+    return section.get("phone_no", ""), section.get("pin", "")
+
+
+def _probe_connection_health() -> dict:
+    """Hit live APIs once to see which bank/TR sessions still work."""
+    expired_banks = []
+    connections = get_bank_connections()
+    if not connections.empty:
+        for _, row in connections.iterrows():
+            already_dead = row.get("status", "active") != "active"
+            if not already_dead:
+                status = get_session_status(row["session_id"])
+                if status in _DEAD_SESSION_STATUSES:
+                    set_bank_connection_status(row["session_id"], "expired")
+                    already_dead = True
+            if already_dead:
+                expired_banks.append({
+                    "id": int(row["id"]),
+                    "display_name": row["display_name"],
+                    "bank_name": row["bank_name"],
+                    "bank_country": row["bank_country"],
+                    "session_id": row["session_id"],
+                })
+
+    phone, pin = _tr_credentials()
+    tr_status = "unconfigured"
+    if phone and pin:
+        alive = tr_session_is_alive(phone, pin)
+        st.session_state["tr_session_valid"] = alive
+        tr_status = "ok" if alive else "expired"
+
+    return {"expired_banks": expired_banks, "tr": tr_status}
+
+
+def _render_auth_completion(auth, key_suffix):
+    """Open-link → paste-redirect-URL step for a new connection or reconnect."""
+    is_reconnect = auth.get("replace_conn_id") is not None
+    verb = "Reconnect" if is_reconnect else "Authorize"
+    st.info(f"{verb} **{auth['bank']}** by opening the link below, then paste the redirect URL back here.")
+    st.markdown(f"[Open authorization link]({auth['url']})")
+    redirect_url = st.text_input("Paste the redirect URL after authorizing",
+                                 key=f"redirect_url_{key_suffix}")
+    if st.button("Complete connection", key=f"complete_conn_{key_suffix}") and redirect_url:
+        try:
+            _sid, n_accs = complete_auth(
+                redirect_url=redirect_url,
+                bank_name=auth["bank"],
+                bank_country=auth["country"],
+                display_name=auth["label"],
+                expected_state=auth.get("state"),
+            )
+            _reconciled = 0
+            if is_reconnect:
+                _old_session = get_connection_session_id(auth["replace_conn_id"])
+                if _old_session:
+                    _reconciled = reconcile_reconnected_accounts(_old_session, _sid)
+                delete_bank_connection(auth["replace_conn_id"])
+            del st.session_state.pending_auth
+            st.session_state.pop("connection_health", None)
+            st.cache_data.clear()
+            _extra = (
+                f" Re-linked {_reconciled} existing account(s) — your history is preserved."
+                if _reconciled else ""
+            )
+            st.success(f"{'Reconnected' if is_reconnect else 'Connected'}! Found {n_accs} account(s).{_extra}")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Connection failed: {e}")
+
+
+def _render_tr_login_flow(key_prefix: str):
+    """Push-approval / TOTP login. Shares tr_* session state with the Banks tab."""
+    phone, pin = _tr_credentials()
+    if not phone or not pin:
+        return
+
+    _login_step = st.session_state.get("tr_login_step", "send_code")
+    if _login_step == "enter_code":
+        st.session_state["tr_login_step"] = "send_code"
+        _login_step = "send_code"
+
+    if _login_step == "send_code":
+        st.caption("Trade Republic will send a push notification to your phone. Confirm it in the app.")
+        if st.button("Request login in TR app", key=f"{key_prefix}_send_code"):
+            try:
+                with st.spinner("Check your Trade Republic app and confirm the login…"):
+                    _tr_api, _countdown = tr_initiate_weblogin(phone, pin)
+                    st.session_state["tr_pending_api"] = _tr_api
+                    st.session_state["tr_pending_countdown"] = _countdown
+                    if tr_weblogin_needs_authenticator(_tr_api):
+                        st.session_state["tr_login_step"] = "enter_totp"
+                        st.rerun()
+                    tr_complete_weblogin(_tr_api)
+                st.session_state.pop("tr_pending_api", None)
+                st.session_state["tr_session_valid"] = True
+                st.session_state["tr_login_step"] = "idle"
+                st.session_state.pop("connection_health", None)
+                st.session_state.pop("force_tr_relogin", None)
+                st.success("Logged in to Trade Republic!")
+                st.rerun()
+            except TimeoutError:
+                st.session_state.pop("tr_pending_api", None)
+                st.error("The login was not confirmed in time. Open the TR app when you retry.")
+            except Exception as e:
+                st.session_state.pop("tr_pending_api", None)
+                st.error(f"Failed to start login: {e}")
+    elif _login_step == "enter_totp":
+        _countdown = st.session_state.get("tr_pending_countdown", 120)
+        st.info(f"Enter the code from your authenticator app (valid for {_countdown}s).")
+        _code = st.text_input("Authenticator code", max_chars=8, key=f"{key_prefix}_login_code")
+        if st.button("Confirm code", key=f"{key_prefix}_confirm_code") and _code:
+            with st.spinner("Completing login…"):
+                try:
+                    tr_complete_weblogin(st.session_state["tr_pending_api"], _code)
+                    st.session_state.pop("tr_pending_api", None)
+                    st.session_state["tr_session_valid"] = True
+                    st.session_state["tr_login_step"] = "idle"
+                    st.session_state.pop("connection_health", None)
+                    st.session_state.pop("force_tr_relogin", None)
+                    st.success("Logged in to Trade Republic!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = True
@@ -346,21 +507,59 @@ _ob_n     = sum(_ob_done)
 _ob_all   = all(_ob_done)
 _ob_label = "✅ Get Started" if _ob_all else f"Get Started ({_ob_n}/8)"
 
+if (
+    "connection_health" not in st.session_state
+    or _minutes_since("last_connection_probe") > 60
+):
+    with st.spinner("Checking bank connections…"):
+        st.session_state.connection_health = _probe_connection_health()
+        _touch("last_connection_probe")
+
+_health = st.session_state.get("connection_health") or {"expired_banks": [], "tr": "unconfigured"}
+_stale_banks = _health.get("expired_banks") or []
+_tr_expired = _health.get("tr") == "expired"
+_force_tr_relogin = bool(st.session_state.get("force_tr_relogin"))
+
+if _stale_banks or _tr_expired or _force_tr_relogin or st.session_state.get("pending_auth"):
+    with st.container(border=True):
+        if _stale_banks or _tr_expired:
+            _issue_names = [b["display_name"] for b in _stale_banks]
+            if _tr_expired:
+                _issue_names.append("Trade Republic")
+            st.error(
+                "Reconnect required — numbers below may be stale. **"
+                + ", ".join(_issue_names)
+                + "**"
+            )
+        for _bank in _stale_banks:
+            _hb1, _hb2 = st.columns([4, 1])
+            _hb1.markdown(f"**{_bank['display_name']}** — PSD2 consent expired (90-day limit)")
+            if _hb2.button("Reconnect", key=f"health_reconnect_{_bank['id']}"):
+                try:
+                    _url, _state = initiate_auth(
+                        bank_name=_bank["bank_name"],
+                        bank_country=_bank["bank_country"],
+                    )
+                    st.session_state.pending_auth = {
+                        "url": _url,
+                        "bank": _bank["bank_name"],
+                        "country": _bank["bank_country"],
+                        "label": _bank["display_name"],
+                        "state": _state,
+                        "replace_conn_id": _bank["id"],
+                    }
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to start reconnection: {e}")
+        if _tr_expired or _force_tr_relogin:
+            st.markdown("**Trade Republic** — session expired" if _tr_expired else "**Trade Republic** — re-login")
+            _render_tr_login_flow("health_tr")
+        if st.session_state.get("pending_auth"):
+            _render_auth_completion(st.session_state.pending_auth, "health")
+
 tab_dashboard, tab_chat, tab_summaries, tab_banks, tab_settings, tab_setup = st.tabs(
     ["Dashboard", "Ask AI", "Summaries", "Banks", "Settings", _ob_label]
 )
-
-
-def _minutes_since(state_key: str) -> float:
-    last = get_state(state_key)
-    if not last:
-        return float("inf")
-    delta = datetime.now(timezone.utc) - datetime.fromisoformat(last)
-    return delta.total_seconds() / 60
-
-
-def _touch(state_key: str):
-    set_state(state_key, datetime.now(timezone.utc).isoformat())
 
 
 # --- Auto-fetch: once per hour ---
@@ -589,17 +788,17 @@ with tab_setup:
             st.divider()
             st.caption("Copy `src/finapp/rules.example.py` → `src/finapp/rules.py` and customize it with your merchant keywords:")
             st.code('cp src/finapp/rules.example.py src/finapp/rules.py', language="bash")
-            st.caption("Keyword rules run before AI categorization. Anything unmatched is sent to Claude (if API key is set). Your `rules.py` is gitignored and won't be overwritten by updates.")
+            st.caption("Keyword rules run before AI categorization. Anything unmatched is sent to the selected OpenRouter model (if a key is set). Your `rules.py` is gitignored and won't be overwritten by updates.")
 
-    # Step 7: Anthropic API key
+    # Step 7: OpenRouter API key
     with st.container(border=True):
         _s7a, _s7b = st.columns([0.05, 0.95])
         _s7a.markdown("✅" if _ob_done[6] else "⬜")
-        _s7b.markdown("**Step 7 — Add Anthropic API key** *(enables AI chat & auto-categorization)*")
+        _s7b.markdown("**Step 7 — Add OpenRouter API key** *(enables AI chat & auto-categorization)*")
         if _ob_has_api_key:
-            st.caption("API key configured. AI chat and auto-categorization are active.")
+            st.caption("API key configured. Pick a model on the Ask AI tab — default is GPT-5.6 Luna.")
         else:
-            st.caption("Add your Anthropic API key in **Settings** to enable AI chat and auto-categorization.")
+            st.caption("Add your OpenRouter API key in **Settings** (or `[openrouter]` in secrets.toml) to enable AI chat and auto-categorization.")
 
     # Step 8: Email notifications
     with st.container(border=True):
@@ -724,15 +923,27 @@ with tab_dashboard:
     st.session_state["current_liquid_savings"] = liquid_savings_total
     st.session_state["current_investments"]    = investments_total
 
-    # Save daily snapshot once all numbers are known — skip if totals are zero (balances not yet loaded)
-    if _minutes_since("last_wealth_snapshot") > 60 * 23 and net_worth > 0:
+    # Save daily snapshot once all numbers are known — skip if totals are zero
+    # (balances not yet loaded) or if a live connection is down (would persist stale figures).
+    _connections_stale = bool(_stale_banks) or _tr_expired
+    if _minutes_since("last_wealth_snapshot") > 60 * 23 and net_worth > 0 and not _connections_stale:
         save_wealth_snapshot(liquid_total, investments_total, net_worth)
         _touch("last_wealth_snapshot")
 
     # --- Summary row ---
     s1, s2, s3 = st.columns(3)
-    s1.metric("Liquid (Bank)", f"€{liquid_total:,.2f}")
-    s2.metric("Investments", f"€{investments_total:,.2f}")
+    s1.metric(
+        "Liquid (Bank)",
+        f"€{liquid_total:,.2f}",
+        delta="Reconnect bank — may be stale" if _stale_banks else None,
+        delta_color="off" if _stale_banks else "normal",
+    )
+    s2.metric(
+        "Investments",
+        f"€{investments_total:,.2f}",
+        delta="Reconnect Trade Republic — may be stale" if _tr_expired else None,
+        delta_color="off" if _tr_expired else "normal",
+    )
     s3.metric("Net Worth", f"€{net_worth:,.2f}")
 
     # --- Wealth growth chart ---
@@ -1463,46 +1674,127 @@ with tab_dashboard:
 # --- Chat tab ---
 with tab_chat:
     st.header("Ask about your finances")
-    st.caption("Ask anything — spending summaries, top merchants, budget status, or categorize transactions.")
+    st.caption("Type in the chat box at the bottom. After a review, answer the questions there in your own words — the agent will write them into memory.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []      # display messages
         st.session_state.agent_messages = []    # full API message history
+
+    _memory_last = get_last_reviewed()
+    if _memory_last:
+        st.caption(f"Memory last reviewed {_memory_last}.")
+    else:
+        st.caption("Memory is empty — run a review to start building context.")
+
+    _current_model = get_chat_model()
+    _new_model = st.selectbox(
+        "Model",
+        CHAT_MODEL_IDS,
+        index=CHAT_MODEL_IDS.index(_current_model),
+        format_func=model_label,
+        help="All models run through OpenRouter. Luna is the cheap default. Switch to Sol or Opus for harder reviews.",
+    )
+    if _new_model != _current_model:
+        st.session_state.llm_model = _new_model
+        set_state("llm_model", _new_model)
+        st.session_state.agent_messages = []
+        st.session_state.chat_history = []
+        st.rerun()
+    st.caption(model_hint(_new_model))
+    if not get_api_key():
+        st.info("Add your OpenRouter API key in **Settings** to chat. Default model is GPT-5.6 Luna.")
+
+    _review_col, _clear_col = st.columns([1, 1])
+    if _review_col.button("Review recent activity", disabled=not get_api_key()):
+        st.session_state.pending_agent_prompt = REVIEW_PROMPT
+    if _clear_col.button("Clear chat", disabled=not st.session_state.chat_history):
+        st.session_state.chat_history = []
+        st.session_state.agent_messages = []
+        st.rerun()
+
+    with st.expander("Agent memory"):
+        st.caption(f"`{MEMORY_PATH}` is gitignored. The agent updates it after a review. Edit here or open the file in your editor.")
+        if "editing_memory" not in st.session_state:
+            st.session_state.editing_memory = False
+
+        if st.session_state.editing_memory:
+            _mem_draft = st.text_area(
+                "Memory file",
+                height=320,
+                key="agent_memory_editor",
+                label_visibility="collapsed",
+            )
+            _save_col, _cancel_col, _open_col = st.columns([1, 1, 2])
+            if _save_col.button("Save memory"):
+                _saved = save_memory(_mem_draft)
+                if _saved.get("ok"):
+                    st.session_state.editing_memory = False
+                    st.toast("Memory saved", icon="✅")
+                    st.rerun()
+                else:
+                    st.error(_saved.get("error", "Could not save memory."))
+            if _cancel_col.button("Cancel"):
+                st.session_state.editing_memory = False
+                st.rerun()
+            if _open_col.button("Open in editor"):
+                _opened = open_memory_in_editor()
+                if _opened.get("ok"):
+                    st.toast(f"Opened {_opened['path']}", icon="📝")
+                else:
+                    st.error(_opened.get("error", "Could not open the memory file."))
+        else:
+            _edit_col, _open_col = st.columns([1, 3])
+            if _edit_col.button("Edit"):
+                st.session_state.agent_memory_editor = load_memory()
+                st.session_state.editing_memory = True
+                st.rerun()
+            if _open_col.button("Open in editor"):
+                _opened = open_memory_in_editor()
+                if _opened.get("ok"):
+                    st.toast(f"Opened {_opened['path']}", icon="📝")
+                else:
+                    st.error(_opened.get("error", "Could not open the memory file."))
+            with st.container(border=True):
+                st.markdown(load_memory())
 
     # Render chat history
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input
-    if prompt := st.chat_input("e.g. How much did I spend last month?"):
-        # Show user message
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
+    _waiting_on_user = bool(st.session_state.chat_history) and st.session_state.chat_history[-1]["role"] == "assistant"
+    _chat_placeholder = (
+        "Answer here — e.g. Timon is the holiday rental, paying for my parents…"
+        if _waiting_on_user
+        else "e.g. How much did I spend last month?"
+    )
+    chat_prompt = st.chat_input(_chat_placeholder)
+    prompt = st.session_state.pop("pending_agent_prompt", None) or chat_prompt
+    if prompt:
+        display_prompt = "Review my recent activity." if prompt == REVIEW_PROMPT else prompt
+        st.session_state.chat_history.append({"role": "user", "content": display_prompt})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(display_prompt)
 
-        # Run agent
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
+                    _mem_before = load_memory()
                     st.session_state.agent_messages.append(
                         {"role": "user", "content": prompt}
                     )
                     reply, updated_messages = run_agent(
                         st.session_state.agent_messages,
-                        api_key=get_api_key()
+                        api_key=get_api_key(),
+                        model=get_chat_model(),
                     )
                     st.session_state.agent_messages = updated_messages
                     st.markdown(reply)
                     st.session_state.chat_history.append({"role": "assistant", "content": reply})
+                    if load_memory() != _mem_before and not st.session_state.get("editing_memory"):
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Agent error: {e}")
-
-    if st.session_state.chat_history:
-        if st.button("Clear chat"):
-            st.session_state.chat_history = []
-            st.session_state.agent_messages = []
-            st.rerun()
 
 # --- Summaries tab ---
 with tab_summaries:
@@ -1528,7 +1820,7 @@ with tab_summaries:
         subject = f"{subject_prefix} — {pd.Timestamp.now().strftime('%d %b %Y')}"
 
         if st.button(f"Generate & send {label.lower()}", key=f"{prompt_key}_send"):
-            with st.spinner("Generating with Claude..."):
+            with st.spinner("Generating summary..."):
                 try:
                     send_summary_email(
                         to_address=st.secrets["email"]["to"],
@@ -1560,46 +1852,6 @@ with tab_summaries:
 # --- Banks tab ---
 with tab_banks:
     st.header("Connected Banks")
-
-    def _render_auth_completion(auth, key_suffix):
-        """Render the 'open link → paste redirect URL → complete' step for either
-        a brand-new connection or a reconnect (auth['replace_conn_id'] set)."""
-        is_reconnect = auth.get("replace_conn_id") is not None
-        verb = "Reconnect" if is_reconnect else "Authorize"
-        st.info(f"{verb} **{auth['bank']}** by opening the link below, then paste the redirect URL back here.")
-        st.markdown(f"[Open authorization link]({auth['url']})")
-        redirect_url = st.text_input("Paste the redirect URL after authorizing",
-                                     key=f"redirect_url_{key_suffix}")
-        if st.button("Complete connection", key=f"complete_conn_{key_suffix}") and redirect_url:
-            try:
-                _sid, n_accs = complete_auth(
-                    redirect_url=redirect_url,
-                    bank_name=auth["bank"],
-                    bank_country=auth["country"],
-                    display_name=auth["label"],
-                    expected_state=auth.get("state"),
-                )
-                # Reconnect: some banks (e.g. Revolut) issue brand-new account
-                # uids on every reconnect. Match the new accounts to the old ones
-                # by IBAN and carry over transaction history, custom names, and
-                # the main-account flag, then drop the old expired connection.
-                _reconciled = 0
-                if is_reconnect:
-                    _old_session = get_connection_session_id(auth["replace_conn_id"])
-                    if _old_session:
-                        _reconciled = reconcile_reconnected_accounts(_old_session, _sid)
-                    delete_bank_connection(auth["replace_conn_id"])
-                del st.session_state.pending_auth
-                st.cache_data.clear()
-                _msg = "Reconnected!" if is_reconnect else "Connected!"
-                _extra = (
-                    f" Re-linked {_reconciled} existing account(s) — your history is preserved."
-                    if _reconciled else ""
-                )
-                st.success(f"{_msg} Found {n_accs} account(s).{_extra} You can rename them above.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Connection failed: {e}")
 
     connections = get_bank_connections()
     bank_accs = get_bank_accounts()
@@ -1687,12 +1939,8 @@ with tab_banks:
                         st.error(f"Failed to sync accounts: {e}")
                 if c4.button("Delete", key=f"del_conn_{conn_row['id']}"):
                     delete_bank_connection(int(conn_row["id"]))
+                    st.session_state.pop("connection_health", None)
                     st.rerun()
-
-                # Inline reconnect flow, shown right under the connection it replaces
-                if st.session_state.get("pending_auth", {}).get("replace_conn_id") == int(conn_row["id"]):
-                    _render_auth_completion(st.session_state.pending_auth,
-                                            key_suffix=f"re_{conn_row['id']}")
 
                 if not accs.empty:
                     _main_acc = get_main_account()
@@ -1727,78 +1975,22 @@ with tab_banks:
     st.divider()
     st.subheader("Trade Republic")
 
-    _tr_phone = st.secrets.get("trade_republic", {}).get("phone_no", "")
-    _tr_pin   = st.secrets.get("trade_republic", {}).get("pin", "")
+    _tr_phone, _tr_pin = _tr_credentials()
 
     if not _tr_phone or not _tr_pin:
         st.info("Add `[trade_republic]` with `phone_no` and `pin` to `.streamlit/secrets.toml` to enable TR integration.")
     else:
-        # Check session validity once per browser session (avoids HTTP call on every rerun)
-        if "tr_session_valid" not in st.session_state:
-            from pytr.api import TradeRepublicApi
-            _check_api = TradeRepublicApi(phone_no=_tr_phone, pin=_tr_pin, save_cookies=True)
-            st.session_state["tr_session_valid"] = _check_api.resume_websession()
-
         _tr_session_valid = st.session_state.get("tr_session_valid", False)
-
-        # -- Status + re-login button --
         _st1, _st2 = st.columns([4, 1])
         if _tr_session_valid:
             _st1.success("Connected to Trade Republic")
         else:
-            _st1.warning("Session expired — please log in again")
+            _st1.warning("Session expired — reconnect using the prompt at the top of the page.")
 
         if _st2.button("Re-login", key="tr_relogin"):
             st.session_state["tr_login_step"] = "send_code"
             st.session_state["tr_session_valid"] = False
-            st.rerun()
-
-        # -- Login state machine --
-        _login_step = st.session_state.get("tr_login_step", "idle" if _tr_session_valid else "send_code")
-
-        if _login_step == "send_code":
-            st.caption("Trade Republic will send a push notification to your phone. Confirm it in the app.")
-            if st.button("Request login in TR app", key="tr_send_code"):
-                try:
-                    with st.spinner("Check your Trade Republic app and confirm the login…"):
-                        _tr_api, _countdown = tr_initiate_weblogin(_tr_phone, _tr_pin)
-                        st.session_state["tr_pending_api"]       = _tr_api
-                        st.session_state["tr_pending_countdown"] = _countdown
-                        if tr_weblogin_needs_authenticator(_tr_api):
-                            st.session_state["tr_login_step"] = "enter_totp"
-                            st.rerun()
-                        tr_complete_weblogin(_tr_api)
-                    st.session_state.pop("tr_pending_api", None)
-                    st.session_state["tr_session_valid"] = True
-                    st.session_state["tr_login_step"]    = "idle"
-                    st.success("Logged in to Trade Republic!")
-                    st.rerun()
-                except TimeoutError:
-                    st.session_state.pop("tr_pending_api", None)
-                    st.error("The login was not confirmed in time. Open the TR app when you retry.")
-                except Exception as e:
-                    st.session_state.pop("tr_pending_api", None)
-                    st.error(f"Failed to start login: {e}")
-
-        elif _login_step == "enter_totp":
-            _countdown = st.session_state.get("tr_pending_countdown", 120)
-            st.info(f"Enter the code from your authenticator app (valid for {_countdown}s).")
-            _code = st.text_input("Authenticator code", max_chars=8, key="tr_login_code")
-            if st.button("Confirm code", key="tr_confirm_code") and _code:
-                with st.spinner("Completing login…"):
-                    try:
-                        tr_complete_weblogin(st.session_state["tr_pending_api"], _code)
-                        st.session_state.pop("tr_pending_api", None)
-                        st.session_state["tr_session_valid"] = True
-                        st.session_state["tr_login_step"]    = "idle"
-                        st.success("Logged in to Trade Republic!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Login failed: {e}")
-
-        elif _login_step == "enter_code":
-            # leftover from the old v1 4-digit flow — restart as v2
-            st.session_state["tr_login_step"] = "send_code"
+            st.session_state["force_tr_relogin"] = True
             st.rerun()
 
         # -- Sync --
@@ -1818,6 +2010,7 @@ with tab_banks:
                             if p["current_price"]
                         }
                         save_tr_prices(_tr_price_map)
+                        _touch("last_tr_sync")
 
                         # Store TR events in main transactions table
                         if _tr_data["transactions"]:
@@ -1913,12 +2106,9 @@ with tab_banks:
                 "country": selected_country, "label": display_name or selected_bank,
                 "state": _state,
             }
+            st.rerun()
         except Exception as e:
             st.error(f"Failed to start authorization: {e}")
-
-    # New-connection auth completion (reconnects render inline under their row above)
-    if "pending_auth" in st.session_state and not st.session_state.pending_auth.get("replace_conn_id"):
-        _render_auth_completion(st.session_state.pending_auth, key_suffix="new")
 
     st.divider()
     st.subheader("Historical data sync")
@@ -1956,16 +2146,17 @@ with tab_settings:
     st.subheader("API Keys")
     _settings_api_key = get_api_key()
     if _settings_api_key:
-        st.success("Anthropic API key is set.")
+        st.success("OpenRouter API key is set.")
         if st.button("Remove key", key="_settings_remove_key"):
-            st.session_state.pop("_anthropic_api_key", None)
+            st.session_state.pop("_openrouter_api_key", None)
             st.rerun()
     else:
-        st.caption("Paste your Anthropic API key to enable AI chat and auto-categorization. Get one at [console.anthropic.com](https://console.anthropic.com).")
-        _settings_key_input = st.text_input("Anthropic API key", type="password", placeholder="sk-ant-...", key="_settings_api_key_input")
+        st.caption("Paste your OpenRouter key to enable AI chat and auto-categorization. Get one at [openrouter.ai/keys](https://openrouter.ai/keys). For a key that survives restarts, add `[openrouter] api_key` in `.streamlit/secrets.toml`.")
+        _settings_key_input = st.text_input("OpenRouter API key", type="password", placeholder="sk-or-v1-...", key="_settings_api_key_input")
         if st.button("Save key", key="_settings_save_key") and _settings_key_input.strip():
-            st.session_state["_anthropic_api_key"] = _settings_key_input.strip()
+            st.session_state["_openrouter_api_key"] = _settings_key_input.strip()
             st.rerun()
+    st.caption(f"Chat model: {model_label(get_chat_model())}. Change it on the Ask AI tab.")
 
     st.divider()
 
@@ -2003,7 +2194,7 @@ with tab_settings:
     st.subheader("Keyword Rules")
     st.caption(
         "Rules automatically assign a category when a transaction's merchant name contains a keyword "
-        "(case-insensitive). They run before AI categorization — anything unmatched is sent to Claude."
+        "(case-insensitive). They run before AI categorization — anything unmatched is sent to the selected OpenRouter model."
     )
     if not _CATEGORIZATION_RULES:
         st.warning(

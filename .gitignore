@@ -19,6 +19,10 @@ finance.db*
 # User-specific categorization rules (copy from rules.example.py)
 src/finapp/rules.py
 
+# Agent memory — personal financial context, never commit
+agent_memory.md
+agent_memory.md.tmp
+
 # Python
 __pycache__/
 *.py[cod]

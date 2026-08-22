@@ -140,7 +140,11 @@ Edit `src/finapp/rules.py` and add keyword → category rules for your own merch
 
 **Important:** add a rule matching your own name as it appears in bank transfer descriptions and assign it to `"Internal Transfer"` — this prevents transfers between your own accounts from inflating income and expense totals.
 
-### 5. Start the app
+### 5. Agent memory
+
+On first run the app copies `agent_memory.example.md` → `agent_memory.md`. That file is gitignored. The agent updates it after you answer review questions; open it in your editor to correct something.
+
+### 6. Start the app
 
 ```bash
 uv run streamlit run app.py
