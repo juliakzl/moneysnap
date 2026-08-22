@@ -1,18 +1,12 @@
 import json
 from datetime import datetime
+import anthropic
 import pandas as pd
 import sqlite3
 import streamlit as st
 from finapp.config import DB_PATH
 from finapp.db import get_uncategorized_merchants, bulk_set_categories, get_state, get_goals, get_savings_accounts, get_main_account, get_bank_accounts
 from finapp.banking.fetcher import get_account_balance
-from finapp.llm import (
-    DEFAULT_CATEGORIZE_MODEL,
-    assistant_to_dict,
-    complete,
-    resolve_chat_model,
-    tools_to_openai,
-)
 from finapp.memory import load_memory, save_memory, scan_recent_activity
 try:
     from finapp.rules import RULES
@@ -266,7 +260,7 @@ def set_category(category, merchant_name=None, transaction_id=None):
             return {"error": "Provide either merchant_name or transaction_id"}
 
 
-# --- Tool definitions (OpenAI/OpenRouter function-calling schema via llm.tools_to_openai) ---
+# --- Tool definitions for Claude ---
 
 TOOLS = [
     {
@@ -461,30 +455,11 @@ def apply_rules() -> int:
     return total
 
 
-def _parse_json_object(text: str) -> dict:
-    raw = (text or "").strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        start, end = raw.find("{"), raw.rfind("}")
-        if start == -1 or end == -1:
-            raise
-        parsed = json.loads(raw[start : end + 1])
-    if not isinstance(parsed, dict):
-        raise ValueError("Expected a JSON object of merchant → category")
-    return parsed
-
-
-def _categorize_batch(api_key: str, merchants: list) -> dict:
-    response = complete(
-        api_key,
-        DEFAULT_CATEGORIZE_MODEL,
-        [{
+def _categorize_batch(client, merchants: list) -> dict:
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=4096,
+        messages=[{
             "role": "user",
             "content": f"""Categorize each merchant name into exactly one of these categories:
 Groceries, Dining, Transport, Shopping, Subscriptions, Health, Entertainment, Travel, Other
@@ -493,12 +468,16 @@ Merchants:
 {json.dumps(merchants, indent=2)}
 
 Respond with a single JSON object mapping each merchant name exactly as given to its category.
-Output only the JSON, no explanation.""",
-        }],
-        max_tokens=4096,
+Output only the JSON, no explanation."""
+        }]
     )
-    text = response.choices[0].message.content or ""
-    return _parse_json_object(text)
+    text = next(b.text for b in response.content if b.type == "text")
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    return json.loads(text.strip())
 
 
 def auto_categorize(api_key: str) -> int:
@@ -511,72 +490,65 @@ def auto_categorize(api_key: str) -> int:
     if not merchants:
         return 0
 
+    client = anthropic.Anthropic(api_key=api_key)
     batch_size = 50
     mapping = {}
     for i in range(0, len(merchants), batch_size):
         batch = merchants[i:i + batch_size]
-        mapping.update(_categorize_batch(api_key, batch))
+        mapping.update(_categorize_batch(client, batch))
 
     bulk_set_categories(mapping)
     return len(mapping)
 
 
-def _run_tool(name: str, arguments: dict):
-    if name == "query_transactions":
-        return query_transactions(**arguments)
-    if name == "get_spending_summary":
-        return get_spending_summary(**arguments)
-    if name == "get_budget_status":
-        return get_budget_status()
-    if name == "get_wealth_snapshot":
-        return get_wealth_snapshot()
-    if name == "set_category":
-        return set_category(**arguments)
-    if name == "scan_recent_activity":
-        return scan_recent_activity(**arguments)
-    if name == "update_memory":
-        return save_memory(arguments.get("content", ""))
-    return {"error": f"Unknown tool: {name}"}
-
-
-def _parse_tool_arguments(raw: str) -> dict:
-    try:
-        parsed = json.loads(raw or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def run_agent(messages: list, api_key: str, model: str | None = None) -> tuple[str, list]:
-    model = resolve_chat_model(model)
-    openai_tools = tools_to_openai(TOOLS)
+def run_agent(messages: list, api_key: str) -> tuple[str, list]:
+    client = anthropic.Anthropic(api_key=api_key)
     system = _build_system_prompt()
 
-    for _ in range(12):
-        response = complete(
-            api_key,
-            model,
-            messages,
-            system=system,
-            tools=openai_tools,
+    while True:
+        response = client.messages.create(
+            model="claude-opus-4-6",
             max_tokens=4096,
+            thinking={"type": "adaptive"},
+            system=system,
+            tools=TOOLS,
+            messages=messages,
         )
-        choice = response.choices[0]
-        msg = choice.message
-        messages.append(assistant_to_dict(msg))
 
-        if not msg.tool_calls:
-            return (msg.content or ""), messages
+        messages.append({"role": "assistant", "content": response.content})
 
-        for call in msg.tool_calls:
-            arguments = _parse_tool_arguments(call.function.arguments)
-            result = _run_tool(call.function.name, arguments)
-            if call.function.name == "update_memory" and result.get("ok"):
-                system = _build_system_prompt()
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call.id,
-                "content": json.dumps(result, default=str),
-            })
+        if response.stop_reason == "end_turn":
+            text = next((b.text for b in response.content if b.type == "text"), "")
+            return text, messages
 
-    return "Stopped after too many tool calls. Try a simpler question or another model.", messages
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                if block.name == "query_transactions":
+                    result = query_transactions(**block.input)
+                elif block.name == "get_spending_summary":
+                    result = get_spending_summary(**block.input)
+                elif block.name == "get_budget_status":
+                    result = get_budget_status()
+                elif block.name == "get_wealth_snapshot":
+                    result = get_wealth_snapshot()
+                elif block.name == "set_category":
+                    result = set_category(**block.input)
+                elif block.name == "scan_recent_activity":
+                    result = scan_recent_activity(**block.input)
+                elif block.name == "update_memory":
+                    result = save_memory(block.input.get("content", ""))
+                    if result.get("ok"):
+                        system = _build_system_prompt()
+                else:
+                    result = {"error": f"Unknown tool: {block.name}"}
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result, default=str)
+                })
+
+            messages.append({"role": "user", "content": tool_results})

@@ -32,15 +32,6 @@ def _make_api(phone_no: str, pin: str):
     return TradeRepublicApi(phone_no=phone_no, pin=pin, save_cookies=True, use_v2_login=True)
 
 
-def tr_session_is_alive(phone_no: str, pin: str) -> bool:
-    """True if saved cookies still resume a live Trade Republic session."""
-    try:
-        api = _make_api(phone_no, pin)
-        return bool(api.resume_websession())
-    except Exception:
-        return False
-
-
 def tr_is_logged_in(phone_no: str, pin: str) -> bool:
     """Check whether a valid saved session exists (no network call needed)."""
     from pathlib import Path
