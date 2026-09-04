@@ -28,6 +28,11 @@ def _trade_republic_api_cls():
 
 
 def _make_api(phone_no: str, pin: str):
+    from pathlib import Path
+
+    # pytr writes cookies to ~/.pytr/cookies.{phone}.txt after login.
+    # The CLI creates this directory; we must too or save() raises ENOENT.
+    (Path.home() / ".pytr").mkdir(parents=True, exist_ok=True)
     TradeRepublicApi = _trade_republic_api_cls()
     return TradeRepublicApi(phone_no=phone_no, pin=pin, save_cookies=True, use_v2_login=True)
 
