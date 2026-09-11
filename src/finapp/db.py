@@ -314,6 +314,12 @@ def get_wealth_snapshots() -> pd.DataFrame:
         return pd.read_sql("SELECT * FROM wealth_snapshots ORDER BY date", conn)
 
 
+def get_latest_wealth_snapshot_date() -> str | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT MAX(date) FROM wealth_snapshots").fetchone()
+    return row[0] if row and row[0] else None
+
+
 def get_assets() -> pd.DataFrame:
     with get_conn() as conn:
         return pd.read_sql("SELECT * FROM assets ORDER BY id", conn)

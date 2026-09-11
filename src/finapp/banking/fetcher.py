@@ -290,9 +290,10 @@ def _parse_transaction(tx: dict, account_id: str) -> dict:
     }
 
 
-def backfill_wealth_snapshots(account_id: str, months_back: int,
+def backfill_wealth_snapshots(account_id: str, months_back: int = 6,
                               current_liquid_savings: float = 0.0,
-                              current_investments: float = 0.0) -> int:
+                              current_investments: float = 0.0,
+                              days_back: int | None = None) -> int:
     """
     Reconstruct daily net worth from transaction history and save as wealth snapshots.
 
@@ -317,7 +318,10 @@ def backfill_wealth_snapshots(account_id: str, months_back: int,
     transfers["date"] = transfers["date"].astype(str)
 
     today = date.today()
-    requested_start = today - timedelta(days=months_back * 30)
+    if days_back is not None:
+        requested_start = today - timedelta(days=days_back)
+    else:
+        requested_start = today - timedelta(days=months_back * 30)
     first_tx_date = date.fromisoformat(txs["date"].min())
     start = max(requested_start, first_tx_date)
     total_days = (today - start).days + 1

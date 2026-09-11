@@ -5,7 +5,8 @@ from datetime import date, timedelta, datetime, timezone
 from finapp.db import (init_db, get_transactions, upsert_transactions, get_state, set_state, get_goals, upsert_goal,
                        delete_goal, get_summaries, get_savings_accounts, upsert_savings_account,
                        delete_savings_account, get_assets, upsert_asset, delete_asset,
-                       save_wealth_snapshot, get_wealth_snapshots, get_account_display_names,
+                       save_wealth_snapshot, get_wealth_snapshots, get_latest_wealth_snapshot_date,
+                       get_account_display_names,
                        get_bank_connections, get_bank_accounts, add_bank_connection,
                        delete_bank_connection, get_connection_session_id, reconcile_reconnected_accounts,
                        upsert_bank_account, update_bank_account_name, update_bank_account_joint,
@@ -726,6 +727,28 @@ with tab_dashboard:
     st.session_state["current_liquid_savings"] = liquid_savings_total
     st.session_state["current_investments"]    = investments_total
 
+    # Fill snapshot gaps once per session (days the app wasn't open)
+    if "_wealth_backfill_attempted" not in st.session_state:
+        st.session_state["_wealth_backfill_attempted"] = True
+        _main = get_main_account()
+        if _main and net_worth > 0:
+            try:
+                _last_snap = get_latest_wealth_snapshot_date()
+                if _last_snap is None:
+                    _days_back = 180
+                else:
+                    _days_back = (date.today() - date.fromisoformat(_last_snap)).days
+                if _days_back > 1:
+                    with st.spinner("Filling net worth history..."):
+                        backfill_wealth_snapshots(
+                            _main,
+                            current_liquid_savings=liquid_savings_total,
+                            current_investments=investments_total,
+                            days_back=_days_back,
+                        )
+            except Exception:
+                pass
+
     # Save daily snapshot once all numbers are known — skip if totals are zero (balances not yet loaded)
     if _minutes_since("last_wealth_snapshot") > 60 * 23 and net_worth > 0:
         save_wealth_snapshot(liquid_total, investments_total, net_worth)
@@ -754,13 +777,11 @@ with tab_dashboard:
 
         _wc1, _wc2, _wc3 = st.columns([2, 2, 4])
         _nw_period = _wc1.selectbox(
-            "Range", ["This month", "Last 3 months", "Last 6 months", "Custom"],
+            "Range", ["Last 3 months", "Last 6 months", "Custom"],
             key="nw_period", label_visibility="collapsed"
         )
         _now = pd.Timestamp.now()
-        if _nw_period == "This month":
-            _nw_from = _now.replace(day=1).normalize()
-        elif _nw_period == "Last 3 months":
+        if _nw_period == "Last 3 months":
             _nw_from = _now - pd.DateOffset(months=3)
         elif _nw_period == "Last 6 months":
             _nw_from = _now - pd.DateOffset(months=6)
@@ -775,7 +796,7 @@ with tab_dashboard:
             "date", var_name="type", value_name="amount"
         )
         chart_data["type"] = chart_data["type"].map({"liquid": "Liquid", "investments": "Investments"})
-        _chart_header("Net Worth Over Time", "Liquid = sum of all bank account balances + flexible savings accounts. Investments = portfolio value (market price × shares) + non-flexible savings. Net worth = Liquid + Investments. Daily snapshots are saved once per day when the app is open; gaps are forward-filled from the last known value.", "info_nw")
+        _chart_header("Net Worth Over Time", "Liquid = sum of all bank account balances + flexible savings accounts. Investments = portfolio value (market price × shares) + non-flexible savings. Net worth = Liquid + Investments. A live snapshot is saved when the app is open; missed days are reconstructed from transactions on startup.", "info_nw")
         fig = px.area(chart_data, x="date", y="amount", color="type",
                       labels={"amount": "€", "date": ""},
                       color_discrete_map={"Liquid": "#3498db", "Investments": "#2ecc71"})
