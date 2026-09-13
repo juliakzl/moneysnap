@@ -16,9 +16,9 @@ A personal finance dashboard that connects to your real bank accounts via Open B
 ![Screenshot](assets/moneysnap_dashboard.png)
 ![Screenshot](assets/moneysnap_spend_graph.png)
 
-
-
 ---
+
+
 
 ## Quick start
 
@@ -36,11 +36,13 @@ cp src/finapp/rules.example.py src/finapp/rules.py
 uv run streamlit run app.py
 ```
 
-Opens at **http://localhost:8501** — the **Get Started** tab walks you through the rest.
+Opens at **[http://localhost:8501](http://localhost:8501)** — the **Get Started** tab walks you through the rest.
 
 > First time? You'll need `uv` and an Enable Banking account. See [full setup](#setup) below.
 
 ---
+
+
 
 ## Prerequisites
 
@@ -54,7 +56,11 @@ Before you start, you'll need:
 
 ---
 
+
+
 ## Setup
+
+
 
 ### 1. Clone and install
 
@@ -64,6 +70,8 @@ cd moneysnap
 uv sync
 ```
 
+
+
 ### 2. Set up your Enable Banking application
 
 Enable Banking is the PSD2 aggregator that handles bank OAuth. You need a registered application to get an `app_id` and a private key.
@@ -71,13 +79,13 @@ Enable Banking is the PSD2 aggregator that handles bank OAuth. You need a regist
 1. Sign up at [enablebanking.com](https://enablebanking.com) and log in to the dashboard
 2. Go to **API Applications** → **Add a new application**
 3. Fill in the application form:
-   - **Environment:** Production
-   - **RSA Key:** select "Generate in browser" — Enable Banking generates the key pair for you
-   - **Name:** e.g. "Money Snap"
-   - **Redirect URI:** `https://localhost:3000/callback`
-   - **Description:** e.g. "Private finance app"
-   - **Email for data protection:** your email address
-   - **Privacy URL / Terms URL:** `https://localhost:3000/callback` (placeholder is fine)
+  - **Environment:** Production
+  - **RSA Key:** select "Generate in browser" — Enable Banking generates the key pair for you
+  - **Name:** e.g. "Money Snap"
+  - **Redirect URI:** `https://localhost:3000/callback`
+  - **Description:** e.g. "Private finance app"
+  - **Email for data protection:** your email address
+  - **Privacy URL / Terms URL:** `https://localhost:3000/callback` (placeholder is fine)
 4. Click **Register** — the private key downloads automatically at this point
 5. Save the downloaded file as `private_prod.pem` in the project root — **never commit it** (it's in `.gitignore`)
 6. Copy your **Application ID** (UUID on the application detail page) — you'll need it for `secrets.toml`
@@ -130,6 +138,8 @@ app_password = "xxxx xxxx xxxx xxxx"   # Gmail App Password (not your login pass
                                         # Generate at myaccount.google.com → Security → App passwords
 ```
 
+
+
 ### 4. Set up your categorization rules
 
 ```bash
@@ -150,9 +160,11 @@ On first run the app copies `agent_memory.example.md` → `agent_memory.md`. Tha
 uv run streamlit run app.py
 ```
 
-Opens at **http://localhost:8501**
+Opens at **[http://localhost:8501](http://localhost:8501)**
 
 ---
+
+
 
 ## First-time setup in the app
 
@@ -165,21 +177,25 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 5. **Set a monthly budget** — Dashboard → Income & Spending → "Set monthly expense budget"
 6. **Set a financial goal** — Dashboard → Goals → add a goal with a target amount
 7. **Configure categories** — Settings → Transaction Categories → add your categories; then edit `src/finapp/rules.py` to add keyword → category rules for automatic matching (copy from `rules.example.py` if you haven't already)
-8.  **Categorize your expenses** - Click on the **Categorize** button at the top right of the app to run a categorization. You will have to categorize new expenses manually when you start the app. 
+8. **Categorize your expenses** - Click on the **Categorize** button at the top right of the app to run a categorization. You will have to categorize new expenses manually when you start the app.
 9. **Add Anthropic API key** — in `secrets.toml` under `[anthropic]` — enables AI chat and auto-categorization
 10. **Set up email summaries** (optional) — requires a Gmail App Password (not your regular login password):
-    1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
-    2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-    3. Create a new app password — name it anything (e.g. "Finance App")
-    4. Copy the generated 16-character password and paste it into `secrets.toml` under `[email] app_password`
+  1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
+  2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+  3. Create a new app password — name it anything (e.g. "Finance App")
+  4. Copy the generated 16-character password and paste it into `secrets.toml` under `[email] app_password`
 
 ---
+
+
 
 ## Trade Republic setup
 
 Trade Republic integration syncs your portfolio positions and trade history directly from your TR account.
 
 > **Powered by [pytr](https://github.com/pytr-org/pytr)** — an unofficial Trade Republic API client.
+
+
 
 ### 1. Add credentials to secrets.toml
 
@@ -204,6 +220,8 @@ The session is saved as a cookie (`~/.pytr/`) so you won't need to log in again 
 > **Note:** Trade Republic uses 2FA by design — your PIN alone is not enough. You must confirm the login in the mobile app.
 
 ---
+
+
 
 ## Configuring transaction rules
 
@@ -230,6 +248,8 @@ Rules are matched case-insensitively against the transaction merchant name and r
 
 ---
 
+
+
 ## Security notes
 
 - `finance.db` — contains real transaction data, never committed (in `.gitignore`)
@@ -239,6 +259,8 @@ Rules are matched case-insensitively against the transaction merchant name and r
 - The repo should stay **private** on GitHub
 
 ---
+
+
 
 ## Troubleshooting
 
@@ -251,7 +273,7 @@ Rules are matched case-insensitively against the transaction merchant name and r
 **OAuth redirect doesn't work / localhost:3000 shows an error**
 → That's expected — the browser will show an error page, but the URL in the address bar contains the `code=` parameter you need. Copy the full URL from the address bar and paste it into the terminal or app.
 
-**Sync fails with `401 Unauthorized` on `/accounts/.../transactions`**
+**Sync fails with** `401 Unauthorized` **on** `/accounts/.../transactions`
 → Your bank consent has expired. Under PSD2/Open Banking, bank connections are valid for **90 days**, after which the bank requires you to re-authenticate. This is a legal limit, not a bug — it recurs roughly every 90 days for each connected bank. The app flags the connection as expired (you'll see a **⚠️ Consent expired** badge in the **Banks** tab and a warning when syncing). To fix: go to the **Banks** tab and click **Reconnect** on the affected bank, then authorize and paste the redirect URL as you did on first connection. This creates a fresh 90-day session.
 
 > **History preservation & the IBAN caveat:** some banks (e.g. Revolut) issue **brand-new account IDs** on every reconnect. To keep your history continuous, the app matches the reconnected accounts to your existing ones **by IBAN** and carries over their transactions, custom display names, and main-account flag. This works whenever the bank reports an IBAN (or BBAN) for the account. If a bank exposes an account with *no* IBAN at all, it can't be matched automatically — that account will appear as new after reconnect, and its older transactions will stay under the previous ID (still in the database, but detached from the new account's name/filter).

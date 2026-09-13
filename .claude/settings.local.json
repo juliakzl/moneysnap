@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run python -c ' *)",
+      "Read(//Users/juliako/.pytr/**)",
+      "Bash(uv run *)",
+      "Bash(git push *)",
+      "Read(//tmp/claude-501/-Users-juliako-Documents-moneysnap/fd0259f7-cd35-4d84-8fd9-10396b889b6d/scratchpad/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8599)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(gh pr create --base main --head fix/bank-consent-reconnect --title 'Handle expired bank consent with in-app reconnect' --body ' *)",
+      "Bash(gh pr create --base main --head fix/tr-compact-portfolio-topic --title 'Fix Trade Republic sync: use compactPortfolioByType topic' --body ' *)",
+      "Bash(git fetch *)",
+      "Bash(gh pr *)",
+      "Bash(git check-ignore *)"
+    ]
+  }
+}
