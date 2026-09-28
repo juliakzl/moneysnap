@@ -3,7 +3,7 @@ Rule-based transaction categorization.
 
 Copy this file to rules.py and customize it for your own merchants.
 Rules are matched case-insensitively against the transaction's merchant name.
-They run before AI categorization — anything unmatched is sent to Claude (if API key is set).
+They run before AI categorization — anything unmatched is sent to the connected model (if an API key is set).
 
 Format: ("keyword", "Category")
 """

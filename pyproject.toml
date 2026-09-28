@@ -15,6 +15,7 @@ dependencies = [
     "yfinance==1.2.0",
     "pytr[playwright]==0.4.10",
     "pre-commit==4.5.1",
+    "openai==3.19.2",
 ]
 
 [build-system]

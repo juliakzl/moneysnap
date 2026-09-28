@@ -22,6 +22,10 @@ from finapp.banking.fetcher import fetch_and_store, get_account_balance, list_ba
 from finapp.investments.etf_catalog import ETF_CATALOG
 from finapp.notifier import send_summary_email, DEFAULT_WEEKLY_PROMPT, DEFAULT_MONTHLY_PROMPT
 from finapp.agent import run_agent, auto_categorize, apply_rules, REVIEW_PROMPT
+from finapp.llm import (
+    PROVIDERS, PROVIDER_INFO, forget_session_key, get_llm_config,
+    has_secret_key, models_for, save_llm_settings,
+)
 from finapp.memory import load_memory, save_memory, get_last_reviewed, open_memory_in_editor
 from finapp.config import MEMORY_PATH
 try:
@@ -38,15 +42,9 @@ def _chart_header(title: str, info: str, key: str):
     c2.checkbox("ℹ", key=key, help=info, value=False)
 
 def get_api_key() -> str:
-    """Return the Anthropic API key — session state takes precedence over secrets.toml."""
-    if "_anthropic_api_key" not in st.session_state:
-        # One-time migration: move key from DB to session state and clear from DB
-        db_key = get_state("anthropic_api_key")
-        if db_key and len(db_key) > 20:
-            st.session_state["_anthropic_api_key"] = db_key
-            set_state("anthropic_api_key", "")
-    key = st.session_state.get("_anthropic_api_key") or st.secrets.get("anthropic", {}).get("api_key", "") or ""
-    return key if len(key) > 20 else ""
+    """Return the active model key, or "" when AI features are not configured."""
+    cfg = get_llm_config()
+    return cfg.api_key if cfg.ready else ""
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = True
@@ -271,9 +269,9 @@ if _btn2_col.button("🏷️ Categorize", use_container_width=True):
         except Exception as e:
             rules_err = e
         try:
-            _key = get_api_key()
-            if _key:
-                n_ai = auto_categorize(api_key=_key)
+            _cfg = get_llm_config()
+            if _cfg.ready:
+                n_ai = auto_categorize(_cfg)
         except Exception as e:
             ai_err = e
 
@@ -592,17 +590,17 @@ with tab_setup:
             st.divider()
             st.caption("Copy `src/finapp/rules.example.py` → `src/finapp/rules.py` and customize it with your merchant keywords:")
             st.code('cp src/finapp/rules.example.py src/finapp/rules.py', language="bash")
-            st.caption("Keyword rules run before AI categorization. Anything unmatched is sent to Claude (if API key is set). Your `rules.py` is gitignored and won't be overwritten by updates.")
+            st.caption("Keyword rules run before AI categorization. Anything unmatched is sent to the connected model (if an API key is set). Your `rules.py` is gitignored and won't be overwritten by updates.")
 
     # Step 7: Anthropic API key
     with st.container(border=True):
         _s7a, _s7b = st.columns([0.05, 0.95])
         _s7a.markdown("✅" if _ob_done[6] else "⬜")
-        _s7b.markdown("**Step 7 — Add Anthropic API key** *(enables AI chat & auto-categorization)*")
+        _s7b.markdown("**Step 7 — Connect a model** *(enables AI chat & auto-categorization)*")
         if _ob_has_api_key:
-            st.caption("API key configured. AI chat and auto-categorization are active.")
+            st.caption("Model configured. AI chat and auto-categorization are active.")
         else:
-            st.caption("Add your Anthropic API key in **Settings** to enable AI chat and auto-categorization.")
+            st.caption("In **Settings**, choose OpenRouter, Claude, or OpenAI and add an API key.")
 
     # Step 8: Email notifications
     with st.container(border=True):
@@ -1486,7 +1484,14 @@ with tab_dashboard:
 # --- Chat tab ---
 with tab_chat:
     st.header("Ask about your finances")
-    st.caption("Type in the chat box at the bottom. After a review, answer the questions there in your own words — the agent will write them into memory.")
+    _chat_cfg = get_llm_config()
+    if _chat_cfg.ready:
+        st.caption(
+            f"Using {PROVIDER_INFO[_chat_cfg.provider]['label']} · `{_chat_cfg.model}`. "
+            "Type in the chat box at the bottom. After a review, answer the questions there in your own words — the agent will write them into memory."
+        )
+    else:
+        st.caption("Connect a model in Settings to ask questions. Leaving this tab open does not call the API.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []      # display messages
@@ -1561,8 +1566,11 @@ with tab_chat:
         if _waiting_on_user
         else "e.g. How much did I spend last month?"
     )
-    chat_prompt = st.chat_input(_chat_placeholder)
+    chat_prompt = st.chat_input(_chat_placeholder, disabled=not _chat_cfg.ready)
     prompt = st.session_state.pop("pending_agent_prompt", None) or chat_prompt
+    if prompt and not _chat_cfg.ready:
+        st.error("Connect a model in Settings first.")
+        prompt = None
     if prompt:
         display_prompt = "Review my recent activity." if prompt == REVIEW_PROMPT else prompt
         st.session_state.chat_history.append({"role": "user", "content": display_prompt})
@@ -1578,7 +1586,7 @@ with tab_chat:
                     )
                     reply, updated_messages = run_agent(
                         st.session_state.agent_messages,
-                        api_key=get_api_key()
+                        get_llm_config(),
                     )
                     st.session_state.agent_messages = updated_messages
                     st.markdown(reply)
@@ -1612,19 +1620,23 @@ with tab_summaries:
         subject = f"{subject_prefix} — {pd.Timestamp.now().strftime('%d %b %Y')}"
 
         if st.button(f"Generate & send {label.lower()}", key=f"{prompt_key}_send"):
-            with st.spinner("Generating with Claude..."):
-                try:
-                    send_summary_email(
-                        to_address=st.secrets["email"]["to"],
-                        gmail_user=st.secrets["email"]["user"],
-                        gmail_app_password=st.secrets["email"]["app_password"],
-                        api_key=get_api_key(),
-                        prompt_template=active_prompt,
-                        subject=subject,
-                    )
-                    st.success("Sent!")
-                except Exception as e:
-                    st.error(f"Failed: {e}")
+            _summary_cfg = get_llm_config()
+            if not _summary_cfg.ready:
+                st.error("Connect a model in Settings before generating a summary.")
+            else:
+                with st.spinner("Generating summary..."):
+                    try:
+                        send_summary_email(
+                            to_address=st.secrets["email"]["to"],
+                            gmail_user=st.secrets["email"]["user"],
+                            gmail_app_password=st.secrets["email"]["app_password"],
+                            cfg=_summary_cfg,
+                            prompt_template=active_prompt,
+                            subject=subject,
+                        )
+                        st.success("Sent!")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
 
     _summary_section("Weekly summary",  "prompt_weekly",  DEFAULT_WEEKLY_PROMPT,  "Weekly Finance Summary")
     st.divider()
@@ -2037,18 +2049,77 @@ with tab_banks:
 with tab_settings:
     st.header("Settings")
 
-    st.subheader("API Keys")
-    _settings_api_key = get_api_key()
-    if _settings_api_key:
-        st.success("Anthropic API key is set.")
-        if st.button("Remove key", key="_settings_remove_key"):
-            st.session_state.pop("_anthropic_api_key", None)
+    st.subheader("Model")
+    st.caption("The model runs only when you categorize, chat, or send a summary. Leaving the app open does not call the API.")
+
+    _saved_cfg = get_llm_config()
+    if "llm_provider_select" not in st.session_state:
+        st.session_state["llm_provider_select"] = _saved_cfg.provider if _saved_cfg.provider in PROVIDERS else "openrouter"
+    if "llm_model_input" not in st.session_state:
+        st.session_state["llm_model_input"] = _saved_cfg.model
+        st.session_state["llm_categorize_model_input"] = _saved_cfg.categorize_model
+        st.session_state["llm_zdr_input"] = _saved_cfg.zdr
+    def _apply_provider_models():
+        _next = st.session_state.get("llm_provider_select")
+        if _next not in PROVIDER_INFO:
+            return
+        _next_model, _next_cat = models_for(_next)
+        st.session_state["llm_model_input"] = _next_model
+        st.session_state["llm_categorize_model_input"] = _next_cat
+
+    _provider = st.selectbox(
+        "Provider",
+        options=PROVIDERS,
+        format_func=lambda provider: PROVIDER_INFO[provider]["label"],
+        key="llm_provider_select",
+        on_change=_apply_provider_models,
+    )
+
+    _provider_info = PROVIDER_INFO[_provider]
+    st.caption(f"{_provider_info['blurb']} Get a key at [{_provider_info['help_url']}]({_provider_info['help_url']}).")
+    st.text_input("Chat and email model", key="llm_model_input")
+    st.text_input("Categorization model", key="llm_categorize_model_input")
+    if _provider == "openrouter":
+        st.checkbox(
+            "Only route to providers that do not store prompts",
+            key="llm_zdr_input",
+            help="OpenRouter calls this Zero Data Retention. Some free models will refuse the request.",
+        )
+
+    _session_keys = st.session_state.get("_llm_keys") or {}
+    _has_session_key = len((_session_keys.get(_provider) or "").strip()) > 20
+    _has_file_key = has_secret_key(_provider)
+    if _has_file_key:
+        st.success(f"{_provider_info['label']} key is saved in secrets.toml.")
+    elif _has_session_key:
+        st.success(f"{_provider_info['label']} key is saved for this session. It is forgotten when you restart the app.")
+        if st.button("Forget session key", key="_settings_remove_key"):
+            forget_session_key(_provider)
             st.rerun()
     else:
-        st.caption("Paste your Anthropic API key to enable AI chat and auto-categorization. Get one at [console.anthropic.com](https://console.anthropic.com).")
-        _settings_key_input = st.text_input("Anthropic API key", type="password", placeholder="sk-ant-...", key="_settings_api_key_input")
-        if st.button("Save key", key="_settings_save_key") and _settings_key_input.strip():
-            st.session_state["_anthropic_api_key"] = _settings_key_input.strip()
+        st.caption(f"No {_provider_info['label']} key yet. Paste one below and click Save. It is written to secrets.toml.")
+
+    if st.session_state.pop("_clear_llm_key_input", False):
+        st.session_state["_settings_api_key_input"] = ""
+    _settings_key_input = st.text_input(
+        "API key",
+        type="password",
+        placeholder=_provider_info["placeholder"],
+        key="_settings_api_key_input",
+    )
+    if st.button("Save", key="_settings_save_llm"):
+        try:
+            save_llm_settings(
+                _provider,
+                st.session_state.get("llm_model_input", ""),
+                st.session_state.get("llm_categorize_model_input", ""),
+                bool(st.session_state.get("llm_zdr_input")) if _provider == "openrouter" else _saved_cfg.zdr,
+                _settings_key_input,
+            )
+        except (OSError, ValueError) as exc:
+            st.error(f"Could not save the API key to secrets.toml: {exc}")
+        else:
+            st.session_state["_clear_llm_key_input"] = True
             st.rerun()
 
     st.divider()
@@ -2087,7 +2158,7 @@ with tab_settings:
     st.subheader("Keyword Rules")
     st.caption(
         "Rules automatically assign a category when a transaction's merchant name contains a keyword "
-        "(case-insensitive). They run before AI categorization — anything unmatched is sent to Claude."
+        "(case-insensitive). They run before AI categorization — anything unmatched is sent to the connected model."
     )
     if not _CATEGORIZATION_RULES:
         st.warning(
