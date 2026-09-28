@@ -4,10 +4,11 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-import anthropic
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+
+from finapp.llm import LLMConfig, complete_text
 
 from finapp.db import (get_transactions, get_budgets, get_state, set_state, get_goals, save_summary,
                        get_savings_accounts, get_main_account, get_bank_accounts, get_assets, get_tr_prices)
@@ -311,26 +312,25 @@ def _collect_financial_context() -> dict:
     }
 
 
-def generate_summary(api_key: str, prompt_template: str) -> str:
-    """Generate a summary email using Claude with the given prompt template.
-    Use {context} in the template as a placeholder for the financial data JSON."""
+def generate_summary(cfg: LLMConfig, prompt_template: str) -> str:
+    """Generate a summary email. Use {context} in the template for the financial data JSON."""
     ctx = _collect_financial_context()
     user_name = st.secrets.get("app", {}).get("user_name", "the user")
     prompt = prompt_template.replace("{context}", json.dumps(ctx, indent=2)).replace("{user_name}", user_name)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model="claude-opus-4-6",
+    return complete_text(
+        prompt,
+        cfg=cfg,
+        model=cfg.model,
         max_tokens=8000,
-        thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": prompt}]
+        thinking=cfg.provider == "anthropic",
     )
-    return next(b.text for b in response.content if b.type == "text")
 
 
 def send_summary_email(to_address: str, gmail_user: str, gmail_app_password: str,
-                       api_key: str, prompt_template: str, subject: str):
-    body = generate_summary(api_key, prompt_template)
+                       cfg: LLMConfig, prompt_template: str, subject: str):
+    body = generate_summary(cfg, prompt_template)
+    if not body.strip():
+        raise RuntimeError("The model returned an empty summary. No email was sent.")
 
     msg = MIMEMultipart()
     msg["From"]    = gmail_user

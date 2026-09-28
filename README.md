@@ -8,10 +8,10 @@ A personal finance dashboard that connects to your real bank accounts via Open B
 - **Income & Spending** — categorized transactions, budget tracking, top merchants, projected monthly spend
 - **Investments** - your investment portfolio (either live pulled from your Trade Republic account or through manual entry/tickers)
 - **Goals** — track progress toward financial targets (e.g. buy a flat, emergency fund)
-- **Chat** — ask questions like "what did I spend on dining last month?" powered by Claude
+- **Chat** — ask questions like "what did I spend on dining last month?" using Claude, OpenAI, or any model on OpenRouter
 - **Weekly and Monthly Summaries** - generate financial summaries on weekly and/or monhtly basis and send them to your email address
 - **Banks** — connect bank accounts via OAuth, sync Trade Republic portfolio
-- **Settings** — manage categories, rules, salary, budgets, email summaries
+- **Settings** — choose a model provider, manage categories, rules, salary, budgets, and email summaries
 
 ![Screenshot](assets/moneysnap_dashboard.png)
 ![Screenshot](assets/moneysnap_spend_graph.png)
@@ -52,7 +52,7 @@ Before you start, you'll need:
 - **Python 3.13+** (uv will handle this automatically)
 - **An Enable Banking account** — free tier works; needed to connect any PSD2-supported bank (Revolut, N26, most EU banks). Setup explained in Step 2.
 - **An Enable Banking private key** — generated when you create an application in the Enable Banking dashboard (instructions below)
-- Optionally: **Anthropic API key** (for AI chat + categorization), **Trade Republic account**, **Gmail** (for email summaries)
+- Optionally: a model API key (OpenRouter, Claude, or OpenAI — for AI chat and categorization), a **Trade Republic account**, **Gmail** (for email summaries)
 
 ---
 
@@ -124,8 +124,16 @@ user_name = "Your Name"
 [enable_banking]
 app_id = "your-app-uuid"       # from enablebanking.com → your application
 
+# Optional — AI chat, categorization, and email summaries. Fill in the providers
+# you want. Each key is kept, so you can switch later in Settings → Model.
 [anthropic]
-api_key = "sk-ant-..."         # from console.anthropic.com — optional, enables AI features
+api_key = "sk-ant-..."         # from console.anthropic.com — direct Claude
+
+[openai]
+api_key = "sk-..."             # from platform.openai.com/api-keys — direct OpenAI
+
+[openrouter]
+api_key = "sk-or-v1-..."       # from openrouter.ai/keys — one key, many models, including free ones
 
 [trade_republic]               # optional — remove section if not using TR
 phone_no = "+49176..."
@@ -178,7 +186,7 @@ Once the app is running, work through these steps (the **Get Started** tab walks
 6. **Set a financial goal** — Dashboard → Goals → add a goal with a target amount
 7. **Configure categories** — Settings → Transaction Categories → add your categories; then edit `src/finapp/rules.py` to add keyword → category rules for automatic matching (copy from `rules.example.py` if you haven't already)
 8. **Categorize your expenses** - Click on the **Categorize** button at the top right of the app to run a categorization. You will have to categorize new expenses manually when you start the app.
-9. **Add Anthropic API key** — in `secrets.toml` under `[anthropic]` — enables AI chat and auto-categorization
+9. **Connect a model** — Settings → Model. Choose OpenRouter, Claude, or OpenAI, set the model ids, and save. A key already in `secrets.toml` is reused. You can store more than one provider key and switch later; click **Save** after changing the dropdown. For OpenRouter's free route, set both model fields to `openrouter/free` and leave "do not store prompts" off. The model runs only when you categorize, chat, or send a summary.
 10. **Set up email summaries** (optional) — requires a Gmail App Password (not your regular login password):
   1. Enable 2-Step Verification on your Google account if not already on ([myaccount.google.com/security](https://myaccount.google.com/security))
   2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
@@ -242,7 +250,7 @@ RULES = [
 ]
 ```
 
-Rules are matched case-insensitively against the transaction merchant name and run before AI categorization — anything not matched gets sent to Claude (if API key is set). You can also manually edit categories inline in the Transactions tab.
+Rules are matched case-insensitively against the transaction merchant name and run before AI categorization — anything not matched is sent to the connected model (if an API key is set). You can also manually edit categories inline in the Transactions tab.
 
 **Important:** Add a rule matching your own name as it appears in bank transfer descriptions and assign it to `"Internal Transfer"` — this prevents transfers between your own accounts from double-counting in income and spending stats.
 
@@ -285,4 +293,4 @@ Rules are matched case-insensitively against the transaction merchant name and r
 → The app waits about two minutes for you to confirm in the TR app. Retry **Request login in TR app** and approve the new push promptly.
 
 **AI features not working**
-→ Check that `[anthropic] api_key` is set in `secrets.toml`. The key starts with `sk-ant-`.
+→ In Settings → Model, check that the selected provider has a key in `secrets.toml` (`[openrouter]`, `[anthropic]`, or `[openai]`) and that you clicked **Save**. OpenRouter free models use the id `openrouter/free`. A Claude id such as `claude-opus-4-6` only works on the Claude provider; on OpenRouter the id looks like `anthropic/claude-opus-4-6`. Clear the chat after switching providers if the next reply errors.

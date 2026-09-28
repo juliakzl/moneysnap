@@ -1,12 +1,12 @@
 import json
 from datetime import datetime
-import anthropic
 import pandas as pd
 import sqlite3
 import streamlit as st
 from finapp.config import DB_PATH
 from finapp.db import get_uncategorized_merchants, bulk_set_categories, get_state, get_goals, get_savings_accounts, get_main_account, get_bank_accounts
 from finapp.banking.fetcher import get_account_balance
+from finapp.llm import LLMConfig, complete, complete_text
 from finapp.memory import load_memory, save_memory, scan_recent_activity
 try:
     from finapp.rules import RULES
@@ -260,7 +260,9 @@ def set_category(category, merchant_name=None, transaction_id=None):
             return {"error": "Provide either merchant_name or transaction_id"}
 
 
-# --- Tool definitions for Claude ---
+# --- Tool definitions (Anthropic schema; OpenAI and OpenRouter are converted at call time) ---
+
+MAX_TOOL_ROUNDS = 8
 
 TOOLS = [
     {
@@ -455,32 +457,64 @@ def apply_rules() -> int:
     return total
 
 
-def _categorize_batch(client, merchants: list) -> dict:
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=4096,
-        messages=[{
-            "role": "user",
-            "content": f"""Categorize each merchant name into exactly one of these categories:
+def _tool_fns() -> dict:
+    return {
+        "query_transactions": query_transactions,
+        "get_spending_summary": get_spending_summary,
+        "get_budget_status": get_budget_status,
+        "get_wealth_snapshot": get_wealth_snapshot,
+        "set_category": set_category,
+        "scan_recent_activity": scan_recent_activity,
+        "update_memory": lambda content="": save_memory(content),
+    }
+
+
+def _dispatch(name: str, arguments: dict) -> dict:
+    fn = _tool_fns().get(name)
+    if fn is None:
+        return {"error": f"Unknown tool: {name}"}
+    try:
+        result = fn(**arguments)
+    except Exception as exc:
+        return {"error": str(exc)}
+    return result if isinstance(result, dict) else {"result": result}
+
+
+def _parse_json_object(text: str) -> dict:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("```", 2)[1]
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1:
+        cleaned = cleaned[start:end + 1]
+    parsed = json.loads(cleaned)
+    if not isinstance(parsed, dict):
+        raise ValueError("Model did not return a JSON object")
+    return parsed
+
+
+def _categorize_batch(cfg: LLMConfig, merchants: list) -> dict:
+    text = complete_text(
+        f"""Categorize each merchant name into exactly one of these categories:
 Groceries, Dining, Transport, Shopping, Subscriptions, Health, Entertainment, Travel, Other
 
 Merchants:
 {json.dumps(merchants, indent=2)}
 
 Respond with a single JSON object mapping each merchant name exactly as given to its category.
-Output only the JSON, no explanation."""
-        }]
+Output only the JSON, no explanation.""",
+        cfg=cfg,
+        model=cfg.categorize_model,
+        max_tokens=4096,
     )
-    text = next(b.text for b in response.content if b.type == "text")
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    return json.loads(text.strip())
+    return _parse_json_object(text)
 
 
-def auto_categorize(api_key: str) -> int:
+def auto_categorize(cfg: LLMConfig) -> int:
     """
     Categorize all uncategorized debit transactions, batching merchants to avoid
     truncated JSON responses when there are many unique merchants.
@@ -490,65 +524,91 @@ def auto_categorize(api_key: str) -> int:
     if not merchants:
         return 0
 
-    client = anthropic.Anthropic(api_key=api_key)
     batch_size = 50
     mapping = {}
     for i in range(0, len(merchants), batch_size):
         batch = merchants[i:i + batch_size]
-        mapping.update(_categorize_batch(client, batch))
+        mapping.update(_categorize_batch(cfg, batch))
 
     bulk_set_categories(mapping)
     return len(mapping)
 
 
-def run_agent(messages: list, api_key: str) -> tuple[str, list]:
-    client = anthropic.Anthropic(api_key=api_key)
+def _coerce_history(messages: list) -> list:
+    """Drop legacy Anthropic content blocks so a saved chat can continue."""
+    if not any(isinstance(message.get("content"), list) for message in messages):
+        return messages
+    cleaned = []
+    for message in messages:
+        content = message.get("content")
+        role = message.get("role")
+        if role == "assistant" and isinstance(content, list):
+            texts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                    texts.append(block["text"])
+                elif getattr(block, "type", None) == "text" and getattr(block, "text", None):
+                    texts.append(block.text)
+            if texts:
+                cleaned.append({"role": "assistant", "content": "\n".join(texts)})
+        elif role in {"user", "assistant"} and isinstance(content, str):
+            item = {"role": role, "content": content}
+            if message.get("tool_calls"):
+                item["tool_calls"] = message["tool_calls"]
+            cleaned.append(item)
+        elif role == "tool" and isinstance(content, str):
+            cleaned.append({
+                "role": "tool",
+                "tool_call_id": message.get("tool_call_id"),
+                "content": content,
+            })
+    return cleaned
+
+
+def _stop_for_tool_limit(messages: list, tool_calls: list) -> tuple[str, list]:
+    for call in tool_calls:
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call.id,
+            "content": json.dumps({"error": "Tool round limit reached"}),
+        })
+    note = "Stopped after too many tool calls. Ask a narrower question."
+    messages.append({"role": "assistant", "content": note})
+    return note, messages
+
+
+def run_agent(messages: list, cfg: LLMConfig) -> tuple[str, list]:
+    messages = _coerce_history(messages)
     system = _build_system_prompt()
+    tool_rounds = 0
 
     while True:
-        response = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=4096,
-            thinking={"type": "adaptive"},
+        turn = complete(
+            messages,
+            cfg=cfg,
+            model=cfg.model,
             system=system,
             tools=TOOLS,
-            messages=messages,
+            max_tokens=4096,
+            thinking=cfg.provider == "anthropic",
         )
+        messages.append(turn.assistant_message)
+        if not turn.tool_calls:
+            return turn.text, messages
 
-        messages.append({"role": "assistant", "content": response.content})
+        tool_rounds += 1
+        if tool_rounds > MAX_TOOL_ROUNDS:
+            return _stop_for_tool_limit(messages, turn.tool_calls)
 
-        if response.stop_reason == "end_turn":
-            text = next((b.text for b in response.content if b.type == "text"), "")
-            return text, messages
-
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                if block.name == "query_transactions":
-                    result = query_transactions(**block.input)
-                elif block.name == "get_spending_summary":
-                    result = get_spending_summary(**block.input)
-                elif block.name == "get_budget_status":
-                    result = get_budget_status()
-                elif block.name == "get_wealth_snapshot":
-                    result = get_wealth_snapshot()
-                elif block.name == "set_category":
-                    result = set_category(**block.input)
-                elif block.name == "scan_recent_activity":
-                    result = scan_recent_activity(**block.input)
-                elif block.name == "update_memory":
-                    result = save_memory(block.input.get("content", ""))
-                    if result.get("ok"):
-                        system = _build_system_prompt()
-                else:
-                    result = {"error": f"Unknown tool: {block.name}"}
-
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(result, default=str)
-                })
-
-            messages.append({"role": "user", "content": tool_results})
+        for call in turn.tool_calls:
+            if call.arguments is None:
+                result = {"error": "Could not parse tool arguments"}
+            else:
+                result = _dispatch(call.name, call.arguments)
+                if call.name == "update_memory" and result.get("ok"):
+                    system = _build_system_prompt()
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": json.dumps(result, default=str),
+            })
